@@ -489,3 +489,38 @@ async def test_set_checkbox_also_works_on_a_radio_group(browser, mock_ats, sampl
         )
     )
     assert result.success, result.error
+
+
+async def test_a_long_answer_is_reported_as_clipped_not_truncated(browser, mock_ats, sample_pdf):
+    """The display is clipped for transport; the agent must not read that as data loss.
+
+    Showing a clipped value with no marker reads as "the field content was truncated",
+    and the agent dutifully rewrites an answer that was perfectly fine.
+    """
+    await _goto(browser, f"{mock_ats}/jobs/MJ-1001")
+    toolbox = BrowserToolbox(ToolContext(browser))
+    await toolbox.execute(
+        AgentDecision(action=ActionType.CLICK_ELEMENT, target=ElementTarget(text="Apply"))
+    )
+    await _reach_questions_step(toolbox, sample_pdf)
+
+    long_answer = (
+        "I have spent the last several years building operational dashboards and "
+        "modelling data in SQL, which is exactly what this role describes. "
+    ) * 3
+    state = await toolbox.context.refresh()
+    motivation = next(e for e in state.elements if e.name == "motivation")
+    await toolbox.execute(
+        AgentDecision(
+            action=ActionType.FILL_FIELD,
+            target=ElementTarget(element_id=motivation.element_id),
+            value=long_answer,
+        )
+    )
+
+    state = await toolbox.context.refresh()
+    updated = next(e for e in state.elements if e.name == "motivation")
+    assert updated.value_length == len(long_answer)
+    description = updated.describe()
+    assert "chars total, shown clipped" in description
+    assert str(len(long_answer)) in description

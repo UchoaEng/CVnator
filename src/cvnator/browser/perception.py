@@ -168,6 +168,10 @@ _INVENTORY_JS = r"""
       disabled: el.disabled === true,
       value: (el.type === 'password') ? null
              : (typeof el.value === 'string' ? el.value.slice(0, 200) : null),
+      // The true length, since `value` above is clipped for transport. Reporting the
+      // clipped length would tell the agent its own answer had been truncated.
+      value_length: (el.type === 'password' || typeof el.value !== 'string')
+                    ? null : el.value.length,
       checked: (el.type === 'checkbox' || el.type === 'radio') ? el.checked : null,
       href: el.getAttribute('href'),
       selector: selectorFor(el),
@@ -240,6 +244,7 @@ class PageElement:
     validation_message: str | None = None
     constraints: dict[str, Any] | None = None
     required_source: str | None = None
+    value_length: int | None = None
 
     def describe(self) -> str:
         """One compact line per element, which is what the reasoning model sees."""
@@ -252,7 +257,17 @@ class PageElement:
         if self.required:
             bits.append("REQUIRED")
         if self.value:
-            bits.append(f'current="{self.value[:60]}"')
+            # Say so when the *display* is truncated. Showing a clipped value with no
+            # marker reads as "the field content is truncated", and the agent rewrites
+            # a field that was perfectly fine.
+            full_length = self.value_length if self.value_length is not None else len(self.value)
+            if full_length > 60:
+                bits.append(
+                    f'current="{self.value[:60]}..." '
+                    f"({full_length} chars total, shown clipped)"
+                )
+            else:
+                bits.append(f'current="{self.value}"')
         if self.checked is not None:
             bits.append(f"checked={self.checked}")
         if self.disabled:
@@ -390,6 +405,7 @@ async def observe(page: Page, *, max_elements: int = MAX_ELEMENTS) -> PageState:
             selector=item["selector"],
             options=item.get("options") or [],
             required_source=item.get("required_source"),
+            value_length=item.get("value_length"),
             invalid=bool(item.get("invalid")),
             validation_message=item.get("validation_message"),
             constraints=item.get("constraints"),
