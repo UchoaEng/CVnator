@@ -315,8 +315,13 @@ class BrowserToolbox:
             checked_after = updated.checked if updated else None
             result.data["checked_before"] = checked_before
             result.data["checked_after"] = checked_after
+            is_radio = resolved.element.type == "radio"
             if checked_after is None:
                 result.observed_state = "Clicked the control; its state could not be re-read"
+            elif is_radio and checked_after:
+                # A radio cannot be un-selected by clicking it, so clicking the one
+                # that is already chosen is a no-op - and the desired end state.
+                result.observed_state = "Radio is selected"
             elif checked_after == checked_before:
                 result.success = False
                 result.error = (

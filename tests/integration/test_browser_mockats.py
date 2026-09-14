@@ -524,3 +524,79 @@ async def test_a_long_answer_is_reported_as_clipped_not_truncated(browser, mock_
     description = updated.describe()
     assert "chars total, shown clipped" in description
     assert str(len(long_answer)) in description
+
+
+async def test_clicking_an_already_selected_radio_is_not_a_failure(
+    browser, mock_ats, sample_pdf
+):
+    """A radio cannot be un-selected by clicking it.
+
+    Treating "state unchanged" as failure made the agent conclude the control was
+    broken, click the other option to "unstick" it, then click back — three failures
+    in a row on a form that was doing exactly what it should.
+    """
+    await _goto(browser, f"{mock_ats}/jobs/MJ-1001")
+    toolbox = BrowserToolbox(ToolContext(browser))
+    await toolbox.execute(
+        AgentDecision(action=ActionType.CLICK_ELEMENT, target=ElementTarget(text="Apply"))
+    )
+    await _reach_questions_step(toolbox, sample_pdf)
+
+    state = await toolbox.context.refresh()
+    yes_radio = next(
+        e for e in state.elements if e.name == "work_auth" and (e.value or "") == "yes"
+    )
+
+    first = await toolbox.execute(
+        AgentDecision(
+            action=ActionType.CLICK_ELEMENT,
+            target=ElementTarget(element_id=yes_radio.element_id),
+        )
+    )
+    assert first.success, first.error
+
+    state = await toolbox.context.refresh()
+    yes_radio = next(
+        e for e in state.elements if e.name == "work_auth" and (e.value or "") == "yes"
+    )
+    assert yes_radio.checked is True
+
+    # Clicking it again is a no-op, and must still read as success.
+    second = await toolbox.execute(
+        AgentDecision(
+            action=ActionType.CLICK_ELEMENT,
+            target=ElementTarget(element_id=yes_radio.element_id),
+        )
+    )
+    assert second.success, second.error
+    assert second.data["checked_after"] is True
+
+
+async def test_a_radio_group_counts_as_one_requirement(browser, mock_ats, sample_pdf):
+    await _goto(browser, f"{mock_ats}/jobs/MJ-1001")
+    toolbox = BrowserToolbox(ToolContext(browser))
+    await toolbox.execute(
+        AgentDecision(action=ActionType.CLICK_ELEMENT, target=ElementTarget(text="Apply"))
+    )
+    await _reach_questions_step(toolbox, sample_pdf)
+
+    state = await toolbox.context.refresh()
+    before = state.form_progress()
+    assert "choose one" in before, before
+
+    yes_radio = next(
+        e for e in state.elements if e.name == "work_auth" and (e.value or "") == "yes"
+    )
+    await toolbox.execute(
+        AgentDecision(
+            action=ActionType.SET_CHECKBOX,
+            target=ElementTarget(element_id=yes_radio.element_id),
+            args={"checked": True},
+        )
+    )
+
+    state = await toolbox.context.refresh()
+    after = state.form_progress()
+    assert "choose one" not in after, after
+    # The group moved from outstanding to done as a single unit.
+    assert "authorized to work" in after.split("ALREADY FILLED")[-1].lower()

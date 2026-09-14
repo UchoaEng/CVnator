@@ -147,16 +147,30 @@ _INVENTORY_JS = r"""
     const tag = el.tagName.toLowerCase();
     const type = (el.getAttribute('type') || '').toLowerCase();
     const label = labelFor(el);
-    // Many forms mark required fields only with a "*" in the label and validate on
-    // the server. Reading the `required` attribute alone would miss all of them.
-    const starRequired = /[*∗]\s*$/.test(label.trim())
-      || /\(\s*(required|obrigat[óo]rio|requerido)\s*\)/i.test(label);
+
+    // fieldset > legend + per-option <label> is the standard accessible pattern for a
+    // radio group. labelFor stops at the wrapping label and returns "Yes"/"No", so the
+    // legend - which carries the actual question AND its required marker - is invisible.
+    // Capture it separately for radios and checkboxes.
+    let groupLabel = '';
+    if (el.type === 'radio' || el.type === 'checkbox') {
+      const fieldset = el.closest('fieldset');
+      const legend = fieldset ? fieldset.querySelector('legend') : null;
+      if (legend) groupLabel = (legend.innerText || '').trim();
+    }
+
+    const marksRequired = (text) => !!text && (
+      /[*∗]\s*$/.test(text.trim())
+      || /\(\s*(required|obrigat[óo]rio|requerido)\s*\)/i.test(text)
+    );
+    const starRequired = marksRequired(label) || marksRequired(groupLabel);
     const entry = {
       element_id: 'e' + (index++),
       tag,
       type: type || null,
       role: el.getAttribute('role') || null,
       label: label.slice(0, 200),
+      group_label: groupLabel.slice(0, 200) || null,
       text: (el.innerText || el.value || '').trim().slice(0, 200),
       name: el.getAttribute('name') || null,
       placeholder: el.getAttribute('placeholder') || null,
@@ -245,11 +259,15 @@ class PageElement:
     constraints: dict[str, Any] | None = None
     required_source: str | None = None
     value_length: int | None = None
+    #: For a radio or checkbox inside a fieldset, the legend's question text.
+    group_label: str | None = None
 
     def describe(self) -> str:
         """One compact line per element, which is what the reasoning model sees."""
         kind = self.role or (f"{self.tag}:{self.type}" if self.type else self.tag)
         bits = [f"[{self.element_id}] {kind}"]
+        if self.group_label and self.group_label != self.label:
+            bits.append(f'question="{self.group_label}"')
         if self.label:
             bits.append(f'label="{self.label}"')
         elif self.text:
@@ -320,17 +338,39 @@ class PageState:
         required = [e for e in self.elements if e.required and not e.disabled]
         if not required:
             return ""
+
+        # A radio group is a single requirement satisfied by any one of its options.
+        # Counting each option separately reports a chosen group as half-finished.
+        radio_groups: dict[str, list[PageElement]] = {}
+        singles: list[PageElement] = []
+        for element in required:
+            if element.type == "radio" and element.name:
+                radio_groups.setdefault(element.name, []).append(element)
+            else:
+                singles.append(element)
+
         done: list[str] = []
         todo: list[str] = []
-        for element in required:
+        for element in singles:
             name = element.label or element.name or element.element_id
-            if element.type in {"checkbox", "radio"}:
+            if element.type == "checkbox":
                 (done if element.checked else todo).append(f"[{element.element_id}] {name}")
             elif (element.value or "").strip():
                 done.append(f"[{element.element_id}] {name}")
             else:
                 todo.append(f"[{element.element_id}] {name}")
-        lines = [f"REQUIRED FIELDS: {len(done)} of {len(required)} done"]
+
+        for group_name, options in radio_groups.items():
+            label = options[0].group_label or options[0].label or group_name
+            chosen = next((o for o in options if o.checked), None)
+            ids = "/".join(o.element_id for o in options)
+            if chosen is not None:
+                done.append(f"[{chosen.element_id}] {label}")
+            else:
+                todo.append(f"[{ids}] {label} (choose one)")
+
+        required_count = len(singles) + len(radio_groups)
+        lines = [f"REQUIRED FIELDS: {len(done)} of {required_count} done"]
         if todo:
             lines.append("  STILL EMPTY: " + "; ".join(todo[:12]))
         if done:
@@ -404,6 +444,7 @@ async def observe(page: Page, *, max_elements: int = MAX_ELEMENTS) -> PageState:
             href=item.get("href"),
             selector=item["selector"],
             options=item.get("options") or [],
+            group_label=item.get("group_label"),
             required_source=item.get("required_source"),
             value_length=item.get("value_length"),
             invalid=bool(item.get("invalid")),
