@@ -21,28 +21,33 @@ CV → Candidate Master Profile → job discovery → job intelligence → match
 → submit → post-submission validation → history → artifact cleanup
 ```
 
-**Observed working in live runs:** discovery and normalisation of postings; match
-scoring that correctly rejects a poorly-fitting role (31%) and accepts a good one
-(100%); a fact-checked tailored CV rendered to PDF and DOCX; the browser agent
-completing a four-step form including a label-less field, a dropdown, an HTML5 `step`
-constraint and a verified file upload; the policy engine blocking overstated
-experience and naming the correct value; honest escalation when it cannot proceed.
+**Verified end to end in a single autonomous run** against the mock ATS, with a local
+model and a real Chromium:
 
-**Verified by tests, not yet by an unbroken autonomous run:** the final
-submit → confirm → cleanup leg. The individual pieces are covered
-(`validate_after_submit`, the artifact GC bargain, the state machine), but the longest
-single run so far ended in `WAITING_USER` after the agent spent its step budget
-re-deriving a value the policy engine had already corrected. That is fixed — see
-`docs/DECISIONS.md` ADR-016 — though "fixed" here means one class of oscillation is
-gone, not that convergence is guaranteed. Treat the autonomous end-to-end path as
-promising rather than proven.
+```
+3 jobs discovered  →  scored 71% / 31% (rejected) / 100%
+                   →  tailored CV, fact-checked, ATS 81.3% → 81.9%
+                   →  5-step form, resume uploaded
+                   →  1 fabricated claim blocked, recovered in one turn
+                   →  pre-submission validation → submitted
+                   →  confirmed on real evidence (reference MA-951122)
+                   →  APPLYING → SUBMITTING → SUBMITTED
+                   →  temp files deleted, recipe retained
+```
+
+The in-flight second application kept its resume, as it should — only a confirmed
+submission triggers cleanup.
+
+One run is not a reliability claim. Expect to hit cases this has not seen; the
+failure modes are designed to be visible (an honest escalation, a recorded failure)
+rather than silent.
 
 **Scaffolds, clearly marked:** the LinkedIn, Indeed, Glassdoor and Gupy adapters.
 Written from the public structure of those sites, **not** validated against
 production, and not registered by default — enabling them is an explicit act. See the
 note on terms of service below.
 
-152 tests (unit + browser integration against the mock ATS).
+188 tests (unit + browser integration against the mock ATS).
 
 ## Requirements
 

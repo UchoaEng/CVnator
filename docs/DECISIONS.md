@@ -328,3 +328,26 @@ gated on that.
 **The principle.** Prefer a missed confirmation to a false one. Failing to notice a
 real submission is a nuisance the user can correct; recording one that never happened
 is a lie the user has no way to detect, and it poisons the history they rely on.
+
+---
+
+## ADR-020 — A refusal the agent cannot act on still costs the application **[from a run]**
+
+**Decision.** A blocked value's remedy depends on the shape of the field. A blocked
+paragraph is told which term to remove, to write the answer again without it, and not
+to substitute a synonym. Short values keep the terse "use a supported value or ask the
+user".
+
+**Why.** The fact validator correctly refused an ETL claim the candidate cannot
+support — four times. Each time it said *"Do not rephrase it — either use a supported
+value or request the answer from the user"*, which is sound advice for a number and
+meaningless for a motivation paragraph: there is no "supported value" to substitute,
+and the user has nothing to supply. The agent resubmitted prose containing the same
+term until the retry budget ran out and the application failed.
+
+With the shape-aware remedy, the next run hit the same block once and recovered in a
+single turn: *"Rewriting the answer for [e10] without 'etl'"*.
+
+**The principle.** A guard is not finished when it refuses correctly. Refusing
+correctly and leaving the caller with no path forward converts a small factual error
+into a lost application. The remedy is part of the guard.
