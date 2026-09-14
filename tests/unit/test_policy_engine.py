@@ -297,3 +297,43 @@ def test_the_identity_guard_does_not_touch_unrelated_fields(profile):
             ctx(profile, field_label=label),
         )
         assert verdict.outcome is PolicyOutcome.ALLOW, f"{label} was wrongly gated"
+
+
+def test_a_blocked_paragraph_is_told_to_drop_the_claim(profile):
+    """Guidance has to match the field shape.
+
+    "Use a supported value" means something for a number and nothing for a
+    paragraph, where the fix is to delete the offending claim and keep the rest.
+    Without this the agent resubmitted prose containing the same unsupported term
+    until its retry budget ran out and the application failed.
+    """
+    engine = PolicyEngine(profile)
+    paragraph = (
+        "I would like to join your team because I have spent several years building "
+        "ETL pipelines and operational dashboards, and I want to keep doing that kind "
+        "of work somewhere it is central to the business rather than incidental."
+    )
+    verdict = engine.evaluate(
+        AgentDecision(
+            action=ActionType.FILL_FIELD,
+            target=ElementTarget(element_id="e10"),
+            value=paragraph,
+        ),
+        ctx(profile, field_label="Why do you want to work here?"),
+    )
+    assert verdict.outcome is PolicyOutcome.BLOCK
+    assert "etl" in verdict.reason.lower()
+    assert "Remove" in verdict.reason
+    assert "synonym" in verdict.reason
+
+
+def test_a_blocked_short_value_keeps_the_terse_guidance(profile):
+    engine = PolicyEngine(profile)
+    verdict = engine.evaluate(
+        AgentDecision(
+            action=ActionType.FILL_FIELD, target=ElementTarget(element_id="e0"), value="9"
+        ),
+        ctx(profile, field_label="How many years of experience do you have with Python?"),
+    )
+    assert verdict.outcome is PolicyOutcome.BLOCK
+    assert "Do not rephrase" in verdict.reason

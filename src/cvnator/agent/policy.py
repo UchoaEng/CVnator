@@ -208,13 +208,33 @@ class PolicyEngine:
         if report.ok:
             return None
 
+        # Guidance has to differ by field shape. "Use a supported value" means
+        # something for a number or a company name and nothing at all for a paragraph,
+        # where the fix is to drop the offending claim and write the rest. Without
+        # this distinction the agent kept resubmitting prose containing the same
+        # unsupported term until the retry budget ran out.
+        is_prose = len(value) > 80 or value.count(" ") >= 12
+        offenders = sorted({v.evidence for v in report.blocking if v.evidence})
+        if is_prose:
+            remedy = (
+                f"Remove {', '.join(repr(o) for o in offenders)} and any reference to "
+                "it, then write the answer again using only what the profile supports. "
+                "Do not substitute a synonym for it."
+                if offenders
+                else "Rewrite the answer using only what the profile supports."
+            )
+        else:
+            remedy = (
+                "Do not rephrase it - either use a value the profile supports, or ask "
+                "the user."
+            )
+
         return PolicyVerdict(
             outcome=PolicyOutcome.BLOCK,
             rule="fact_integrity",
             reason=(
                 f"Value rejected as unsupported by the candidate profile: "
-                f"{report.summary()}. Do not rephrase it - either use a supported "
-                f"value or request the answer from the user."
+                f"{report.summary()}. {remedy}"
             ),
             intervention_kind=InterventionKind.UNKNOWN_PERSONAL_INFORMATION.value,
         )
