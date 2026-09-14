@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { api, type ApplicationSummary } from "../lib/api";
 
 const STATE_TONE: Record<string, string> = {
@@ -71,8 +71,8 @@ export function ApplicationsPage() {
             </thead>
             <tbody>
               {visible.map((application) => (
-                <>
-                  <tr key={application.id}>
+                <Fragment key={application.id}>
+                  <tr>
                     <td>{application.job.role}</td>
                     <td>{application.job.company}</td>
                     <td>
@@ -105,13 +105,13 @@ export function ApplicationsPage() {
                     </td>
                   </tr>
                   {expanded === application.id && (
-                    <tr key={`${application.id}-detail`}>
+                    <tr>
                       <td colSpan={6} style={{ background: "var(--bg)" }}>
                         <Detail application={application} />
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))}
             </tbody>
           </table>
