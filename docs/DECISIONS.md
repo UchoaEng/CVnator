@@ -242,3 +242,57 @@ runtime knew something and had not told the agent.
 **Still open.** Whether these changes are sufficient is an empirical question, and
 the honest answer is that it needs more runs than one. The step budget is deliberately
 left at 60: a larger budget would hide oscillation rather than fix it.
+
+---
+
+## ADR-017 — Identity fields are checked positively, not negatively **[from a run]**
+
+**Decision.** When a field label asks for the candidate's own employer or job title,
+the value must *match something in the profile*. Anything else is blocked, and the
+message names the value that should have been used.
+
+**Why.** Asked for "Company" under *Most recent experience*, the agent filled in
+**the company it was applying to**. The mock ATS received
+`current_company = "Lumina Tecnologia"` where the candidate's employer is
+"Northbridge Logística".
+
+Nothing caught it, and the reasons are worth stating plainly:
+
+* It contains no unsupported technology, so the skill check passed.
+* It contains no number, so the duration check passed.
+* The entity check only fires on attribution phrasing ("at <Company>") and is
+  warn-level anyway.
+* The value is a real company name in plausible form. **There is no negative signal
+  to detect.**
+
+This is the shape of error a keyword-based guard cannot see: a well-formed, confident,
+entirely wrong answer. The only defence is to require a positive match against the
+profile rather than to scan for something suspicious. Fuzzy matching handles accents
+and spacing so that "Northbridge Logistica" is not blocked for missing an í.
+
+**The general principle.** Where a field has a knowable correct answer, validate
+against that answer. Reserve pattern-matching for free text, where there is nothing to
+match against.
+
+---
+
+## ADR-018 — Missing context looks exactly like missing capability **[from a run]**
+
+**Decision.** The profile digest renders skills with their years — `SQL (5y)` — and
+says explicitly to prefer the per-skill number over the total.
+
+**Why.** The agent escalated to the user with: *"the profile facts list total
+experience (6.2) but do not specify how many years are specifically with SQL. I cannot
+guess a truthful value."*
+
+That is textbook-correct behaviour — refusing to guess and asking instead. The problem
+is that the answer was already on file. The digest listed skill *names* only, so the
+agent could not see `SQL: 5.0`. The system had the fact and did not show it.
+
+Together with ADR-012 (asking for a resume path the runtime already held) and ADR-016
+(re-deriving a value the policy engine had already corrected), this is now the third
+autonomy failure of the same shape. Every one of them was the runtime knowing
+something and not telling the agent — not the agent being incapable.
+
+When an escalation looks unnecessary, the first question is not "why did the model get
+this wrong" but "what did we fail to put in front of it".
