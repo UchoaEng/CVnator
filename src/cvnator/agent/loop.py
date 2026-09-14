@@ -21,6 +21,7 @@ Escalation to the user is a first-class outcome, not an error path.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -267,6 +268,8 @@ class FormAgent:
         visual: VisualReading | None,
         scope: MemoryScope,
         resume_path: Path | None = None,
+        settled: dict[str, str] | None = None,
+        corrections: dict[str, str] | None = None,
     ) -> str:
         """Bounded per-step context.
 
@@ -326,6 +329,20 @@ class FormAgent:
                 )
             lines.append(f"  observed: {last_result.observed_state[:600]}")
             blocks += lines
+        if settled:
+            blocks += [
+                "",
+                "VALUES YOU HAVE ALREADY ENTERED IN THIS APPLICATION "
+                "(settled; do not revisit them):",
+                *[f"  - {label}: {value}" for label, value in list(settled.items())[:20]],
+            ]
+        if corrections:
+            blocks += [
+                "",
+                "CORRECTIONS THE POLICY ENGINE HAS ALREADY REQUIRED (final - "
+                "re-deriving the original value will simply be blocked again):",
+                *[f"  - {label}: use {value}" for label, value in list(corrections.items())[:10]],
+            ]
         if recovery_hint:
             blocks += ["", f"RECOVERY INSTRUCTION: {recovery_hint}"]
         return "\n".join(blocks)
@@ -388,6 +405,9 @@ class FormAgent:
 
         last_result: ToolResult | None = None
         recovery_hint = ""
+        #: field label -> value the policy engine insisted on. Kept for the whole
+        #: application so a blocked value is not re-derived a few turns later.
+        corrections: dict[str, str] = {}
         visual: VisualReading | None = None
         checkpoint: Checkpoint | None = None
         pre_submission_passed = False
@@ -440,7 +460,7 @@ class FormAgent:
             # --- UNDERSTAND + PLAN ----------------------------------------------
             context = self._build_context(
                 state, job, goal, checkpoint, last_result, recovery_hint, visual, scope,
-                resume_path,
+                resume_path, outcome.answers_used, corrections,
             )
             try:
                 decision = await self._plan(context)
@@ -517,6 +537,9 @@ class FormAgent:
                     url_after=state.url,
                     page_fingerprint=state.fingerprint,
                 )
+                suggested = re.search(r"Enter ([\w.,]+) instead", verdict.reason)
+                if suggested and field_label:
+                    corrections[field_label] = suggested.group(1).rstrip(".")
                 recovery_hint = (
                     f"The policy engine blocked that action: {verdict.reason} "
                     "Choose a different action. Do not retry the blocked one."

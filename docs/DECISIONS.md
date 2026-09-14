@@ -213,3 +213,32 @@ are actually ready.
 
 **What is deliberately absent.** No stealth flags, no fingerprint spoofing, no CAPTCHA
 solving. A block becomes an escalation, not a workaround.
+
+---
+
+## ADR-016 — Corrections and settled values must survive the turn **[from a run]**
+
+**Decision.** The per-step context carries two additional blocks: the values already
+entered in this application, and any value the policy engine has insisted on.
+`PageState.form_progress()` also renders an explicit checklist of which required
+fields remain.
+
+**Why.** The first full end-to-end run did not finish. The pipeline worked —
+discovery, matching, a fact-checked tailored CV, four form steps, a verified upload —
+and the policy engine correctly blocked nine attempts to overstate experience. But
+the agent then exhausted its 60-step budget and escalated, because each turn
+re-derived the blocked value from the profile and tried it again. The context said
+what the page looked like, not what had already been settled.
+
+The escalation itself was correct behaviour: the run ended in `WAITING_USER` with an
+honest reason, not a fabricated success. But 21 tool retries across 93 steps is a
+system spending its budget arguing with itself.
+
+**The general lesson.** Autonomy is lost to missing context at least as often as to
+missing capability. Both of the substantial autonomy failures observed — this one and
+the agent asking for a resume path it already had (ADR-012) — were cases where the
+runtime knew something and had not told the agent.
+
+**Still open.** Whether these changes are sufficient is an empirical question, and
+the honest answer is that it needs more runs than one. The step budget is deliberately
+left at 60: a larger budget would hide oscillation rather than fix it.
