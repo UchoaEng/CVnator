@@ -428,6 +428,18 @@ def create_app() -> FastAPI:
         APPLICATIONS[token] = MockApplication(token=token, job_id=job_id)
         return RedirectResponse(f"/apply/{token}/1", status_code=303)
 
+    # Declared before the {step} route: FastAPI matches in definition order, and
+    # "/apply/{token}/{step}" with step:int would try to coerce "done" and 422.
+    @app.get("/apply/{token}/done", response_class=HTMLResponse)
+    async def done(token: str) -> HTMLResponse:
+        try:
+            application = _app_or_404(token)
+        except KeyError:
+            return HTMLResponse("<h1>Application session expired</h1>", status_code=404)
+        return _render(
+            "done", app=application, job=MOCK_JOBS[application.job_id], title="Submitted"
+        )
+
     @app.get("/apply/{token}/{step}", response_class=HTMLResponse)
     async def show_step(token: str, step: int) -> HTMLResponse:
         try:
@@ -600,13 +612,6 @@ def create_app() -> FastAPI:
         application.submitted = True
         application.reference = f"MA-{secrets.randbelow(900000) + 100000}"
         return RedirectResponse(f"/apply/{token}/done", status_code=303)
-
-    @app.get("/apply/{token}/done", response_class=HTMLResponse)
-    async def done(token: str) -> HTMLResponse:
-        application = _app_or_404(token)
-        return _render(
-            "done", app=application, job=MOCK_JOBS[application.job_id], title="Submitted"
-        )
 
     @app.get("/_debug/applications")
     async def debug_applications() -> dict[str, Any]:
