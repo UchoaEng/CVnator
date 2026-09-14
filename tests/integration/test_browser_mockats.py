@@ -387,3 +387,105 @@ async def test_form_progress_lists_what_is_left(browser, mock_ats):
     assert "1 of" in partial
     assert "do not refill" in partial
     assert "Full name" in partial
+
+
+async def _reach_questions_step(toolbox: BrowserToolbox, sample_pdf) -> None:
+    """Drive the wizard as far as the screening questions."""
+    await _fill_step_one(toolbox)
+    for name, value in (
+        ("current_title", "Data Analyst"),
+        ("current_company", "Acme Log"),
+        ("years_experience", "6"),
+    ):
+        state = await toolbox.context.refresh()
+        el = next(e for e in state.elements if e.name == name)
+        await toolbox.execute(
+            AgentDecision(
+                action=ActionType.FILL_FIELD,
+                target=ElementTarget(element_id=el.element_id),
+                value=value,
+            )
+        )
+    state = await toolbox.context.refresh()
+    seniority = next(e for e in state.elements if e.name == "seniority")
+    await toolbox.execute(
+        AgentDecision(
+            action=ActionType.SELECT_OPTION,
+            target=ElementTarget(element_id=seniority.element_id),
+            value="mid",
+        )
+    )
+    state = await toolbox.context.refresh()
+    nxt = next(e for e in state.elements if e.tag == "button" and "continue" in e.text.lower())
+    await toolbox.execute(
+        AgentDecision(
+            action=ActionType.CLICK_ELEMENT, target=ElementTarget(element_id=nxt.element_id)
+        )
+    )
+    state = await toolbox.context.refresh()
+    file_input = next(e for e in state.elements if e.type == "file")
+    await toolbox.execute(
+        AgentDecision(
+            action=ActionType.UPLOAD_FILE,
+            target=ElementTarget(element_id=file_input.element_id),
+            value=str(sample_pdf),
+        )
+    )
+    state = await toolbox.context.refresh()
+    nxt = next(e for e in state.elements if e.tag == "button" and "continue" in e.text.lower())
+    result = await toolbox.execute(
+        AgentDecision(
+            action=ActionType.CLICK_ELEMENT, target=ElementTarget(element_id=nxt.element_id)
+        )
+    )
+    assert result.success, result.error
+
+
+async def test_clicking_a_checkbox_is_verified_by_its_state(browser, mock_ats, sample_pdf):
+    """Toggling a checkbox leaves the page identical; that is success, not failure."""
+    await _goto(browser, f"{mock_ats}/jobs/MJ-1001")
+    toolbox = BrowserToolbox(ToolContext(browser))
+    await toolbox.execute(
+        AgentDecision(action=ActionType.CLICK_ELEMENT, target=ElementTarget(text="Apply"))
+    )
+    await _reach_questions_step(toolbox, sample_pdf)
+
+    state = await toolbox.context.refresh()
+    consent = next(e for e in state.elements if e.name == "consent")
+    assert consent.checked is False
+
+    result = await toolbox.execute(
+        AgentDecision(
+            action=ActionType.CLICK_ELEMENT,
+            target=ElementTarget(element_id=consent.element_id),
+        )
+    )
+    assert result.success, result.error
+    assert result.data["checked_before"] is False
+    assert result.data["checked_after"] is True
+
+    state = await toolbox.context.refresh()
+    assert next(e for e in state.elements if e.name == "consent").checked is True
+
+
+async def test_set_checkbox_also_works_on_a_radio_group(browser, mock_ats, sample_pdf):
+    await _goto(browser, f"{mock_ats}/jobs/MJ-1001")
+    toolbox = BrowserToolbox(ToolContext(browser))
+    await toolbox.execute(
+        AgentDecision(action=ActionType.CLICK_ELEMENT, target=ElementTarget(text="Apply"))
+    )
+    await _reach_questions_step(toolbox, sample_pdf)
+
+    state = await toolbox.context.refresh()
+    # Both radios share name="work_auth"; the selector must still target one of them.
+    yes_radio = next(
+        e for e in state.elements if e.name == "work_auth" and e.type == "radio"
+    )
+    result = await toolbox.execute(
+        AgentDecision(
+            action=ActionType.SET_CHECKBOX,
+            target=ElementTarget(element_id=yes_radio.element_id),
+            args={"checked": True},
+        )
+    )
+    assert result.success, result.error

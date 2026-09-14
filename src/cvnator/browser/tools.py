@@ -288,14 +288,48 @@ class BrowserToolbox:
                 self.context, decision, success=False, url_before=url, fingerprint_before=fp,
                 error=f"Could not resolve target {decision.target!r} on this page",
             )
+        # Toggling a checkbox or radio is a legitimate click that leaves the page
+        # structurally identical, so it has to be verified by its own state rather
+        # than by whether the page moved.
+        toggle = resolved.element is not None and resolved.element.type in {"checkbox", "radio"}
+        checked_before = resolved.element.checked if toggle and resolved.element else None
+
         await self.context.browser.click(resolved.selector)
 
-        # A click that changed nothing is not a success, whatever Playwright says.
         result = await _result(
             self.context, decision, success=True, url_before=url, fingerprint_before=fp,
             observed=f"Clicked via {resolved.strategy}",
             data={"selector": resolved.selector, "strategy": resolved.strategy},
         )
+
+        if toggle and resolved.element is not None:
+            fresh = self.context.state
+            updated = next(
+                (
+                    e
+                    for e in (fresh.elements if fresh else [])
+                    if e.selector == resolved.element.selector
+                ),
+                None,
+            )
+            checked_after = updated.checked if updated else None
+            result.data["checked_before"] = checked_before
+            result.data["checked_after"] = checked_after
+            if checked_after is None:
+                result.observed_state = "Clicked the control; its state could not be re-read"
+            elif checked_after == checked_before:
+                result.success = False
+                result.error = (
+                    f"The control is still {'checked' if checked_after else 'unchecked'} "
+                    "after the click. It may be disabled or covered by another element."
+                )
+            else:
+                result.observed_state = (
+                    f"Toggled to {'checked' if checked_after else 'unchecked'}"
+                )
+            return result
+
+        # For every other click, a page that did not move means nothing happened.
         if not result.dom_changed and not result.changed_url:
             result.success = False
             # The most common cause by far is HTML5 constraint validation refusing to
