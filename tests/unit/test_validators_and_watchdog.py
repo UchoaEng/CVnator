@@ -311,3 +311,28 @@ def test_daily_limit_tracking():
     assert limiter.daily_limit_reached("mock")
     assert limiter.applications_today("mock") == 2
     assert not limiter.daily_limit_reached("other")
+
+
+def test_block_detection_ignores_markup_and_scripts():
+    """Run against visible text, not raw HTML.
+
+    "rate limit" appears in plenty of JavaScript bundles and CSS class names. Reading
+    the raw document would pause the whole session on a page that is working fine.
+    """
+    # A bundle carrying the strings for an error state it is not currently showing.
+    html = (
+        "<html><head><script>"
+        'const MESSAGES={429:"Too many requests, please slow down",'
+        '403:"Access denied"};'
+        "</script></head>"
+        "<body><h1>Data Analyst</h1><p>Apply for this position.</p></body></html>"
+    )
+    assert detect_block(html), "raw HTML does trip the detector - which is why we do not use it"
+
+    visible_text = "Data Analyst\nApply for this position."
+    assert not detect_block(visible_text)
+
+
+def test_a_genuine_block_message_is_still_caught():
+    assert detect_block("We have detected unusual traffic from your network.")
+    assert detect_block("Your account has been restricted.")

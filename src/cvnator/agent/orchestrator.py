@@ -34,6 +34,7 @@ from cvnator.agent.pacing import RateLimiter, detect_block
 from cvnator.agent.policy import PolicyEngine
 from cvnator.ai.gateway import AIGateway
 from cvnator.browser.controller import BrowserController
+from cvnator.browser.perception import observe
 from cvnator.browser.tools import BrowserToolbox, ToolContext
 from cvnator.config import Settings, get_settings
 from cvnator.db.base import session_scope
@@ -435,8 +436,11 @@ class AgentSession:
             await self.rate_limiter.on_error(job.platform)
             return
 
-        state = await self.browser.page.content()
-        blocked = detect_block(state)
+        # Block detection reads *visible text*, not raw HTML: a phrase like "rate
+        # limit" inside a script bundle or a class name would otherwise pause the
+        # whole session on a page that is working perfectly well.
+        page_state = await observe(self.browser.page)
+        blocked = detect_block(page_state.visible_text())
         if blocked:
             log.needs_user("Platform %s signalled a block ('%s'); pausing", job.platform, blocked)
             await self.ask_user(

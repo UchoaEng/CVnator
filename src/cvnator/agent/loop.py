@@ -129,8 +129,21 @@ HARD RULES
 ANSWERING QUESTIONS
 - Prefer a remembered answer when one is listed for this question.
 - Answer in the language of the form.
-- Keep free-text answers concrete, specific to this employer, and drawn from the
-  candidate's real experience. Two to four sentences.
+- Keep free-text answers concrete and drawn from the candidate's real experience.
+  Two to four sentences.
+
+OPEN QUESTIONS LIKE "Why do you want to work here?"
+These are answerable and you should answer them. The rule against inventing facts
+applies to claims about THE CANDIDATE, not to ordinary motivation.
+- Build the answer from two things you already have: what the posting says the role
+  involves, and what the candidate has actually done.
+- Do not assert facts about the company beyond what the posting states. Do not
+  praise its culture, size, mission or products unless the posting says so.
+- Do not claim prior familiarity with the company, or that they have "long admired"
+  it. Connect the role's stated responsibilities to the candidate's real work.
+- Only use `request_user_input` here if the question asks for something factual you
+  genuinely do not have - a salary figure, a notice period, a certification. Not
+  knowing anything about the employer is NOT a reason to escalate.
 
 Return only JSON matching the schema.
 """
