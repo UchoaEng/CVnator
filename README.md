@@ -11,8 +11,8 @@ and the code says so out loud when you do.
 
 ## What works today
 
-The vertical slice runs end to end against a local mock ATS with a real local model
-and a real Chromium:
+The pipeline runs against a local mock ATS with a real local model and a real
+Chromium:
 
 ```
 CV → Candidate Master Profile → job discovery → job intelligence → match scoring
@@ -21,13 +21,28 @@ CV → Candidate Master Profile → job discovery → job intelligence → match
 → submit → post-submission validation → history → artifact cleanup
 ```
 
-- **Working and tested:** the whole pipeline above, the mock ATS adapter, the generic
-  AI-driven ATS fallback, the policy engine, memory, the watchdog, garbage collection,
-  the API and the UI. 100 unit tests.
-- **Scaffolds, clearly marked:** the LinkedIn and Gupy adapters. They are written from
-  the public structure of those sites and have **not** been validated against
-  production. They are not registered by default — enabling them is an explicit act.
-  See the note on terms of service below.
+**Observed working in live runs:** discovery and normalisation of postings; match
+scoring that correctly rejects a poorly-fitting role (31%) and accepts a good one
+(100%); a fact-checked tailored CV rendered to PDF and DOCX; the browser agent
+completing a four-step form including a label-less field, a dropdown, an HTML5 `step`
+constraint and a verified file upload; the policy engine blocking overstated
+experience and naming the correct value; honest escalation when it cannot proceed.
+
+**Verified by tests, not yet by an unbroken autonomous run:** the final
+submit → confirm → cleanup leg. The individual pieces are covered
+(`validate_after_submit`, the artifact GC bargain, the state machine), but the longest
+single run so far ended in `WAITING_USER` after the agent spent its step budget
+re-deriving a value the policy engine had already corrected. That is fixed — see
+`docs/DECISIONS.md` ADR-016 — though "fixed" here means one class of oscillation is
+gone, not that convergence is guaranteed. Treat the autonomous end-to-end path as
+promising rather than proven.
+
+**Scaffolds, clearly marked:** the LinkedIn, Indeed, Glassdoor and Gupy adapters.
+Written from the public structure of those sites, **not** validated against
+production, and not registered by default — enabling them is an explicit act. See the
+note on terms of service below.
+
+152 tests (unit + browser integration against the mock ATS).
 
 ## Requirements
 
