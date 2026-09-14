@@ -815,6 +815,14 @@ class AgentSession:
                 )
 
         target: ApplicationState = outcome.state
+        # SUBMITTED is only reachable through SUBMITTING, and deliberately so - the
+        # intermediate state is what "we pressed submit and are awaiting evidence"
+        # means. An agent that submitted via a plain click never passed through it, so
+        # step through explicitly rather than relaxing the state machine.
+        if target is ApplicationState.SUBMITTED:
+            self._transition(
+                application_id, ApplicationState.SUBMITTING, "Submission observed on the page"
+            )
         recorded = self._transition(application_id, target, "Agent loop finished")
 
         if target is ApplicationState.SUBMITTED and not recorded:
