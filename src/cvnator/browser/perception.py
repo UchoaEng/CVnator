@@ -295,12 +295,42 @@ class PageState:
     def has_password_field(self) -> bool:
         return any(e.type == "password" for e in self.elements)
 
+    def form_progress(self) -> str:
+        """A checklist of required fields and whether each is already satisfied.
+
+        The element inventory technically contains this, but a model reading 20 lines
+        of attributes reliably loses track and refills fields it has already filled.
+        Stating the remaining work explicitly is far cheaper than the wasted cycles.
+        """
+        required = [e for e in self.elements if e.required and not e.disabled]
+        if not required:
+            return ""
+        done: list[str] = []
+        todo: list[str] = []
+        for element in required:
+            name = element.label or element.name or element.element_id
+            if element.type in {"checkbox", "radio"}:
+                (done if element.checked else todo).append(f"[{element.element_id}] {name}")
+            elif (element.value or "").strip():
+                done.append(f"[{element.element_id}] {name}")
+            else:
+                todo.append(f"[{element.element_id}] {name}")
+        lines = [f"REQUIRED FIELDS: {len(done)} of {len(required)} done"]
+        if todo:
+            lines.append("  STILL EMPTY: " + "; ".join(todo[:12]))
+        if done:
+            lines.append("  ALREADY FILLED (do not refill): " + "; ".join(done[:12]))
+        return "\n".join(lines)
+
     def as_prompt_block(self) -> str:
         parts = [
             f"URL: {self.url}",
             f"TITLE: {self.title}",
             f"PAGE LANGUAGE: {self.lang or 'unknown'}",
         ]
+        progress = self.form_progress()
+        if progress:
+            parts.append(progress)
         if self.alerts:
             parts.append("VALIDATION MESSAGES ON PAGE:")
             parts += [f"  ! {a}" for a in self.alerts]

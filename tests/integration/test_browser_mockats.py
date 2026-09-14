@@ -358,3 +358,32 @@ async def test_fingerprint_ignores_volatile_numbers():
     first = compute_fingerprint("https://x/a", "T", elements, "Generated at 12:04:11")
     second = compute_fingerprint("https://x/a", "T", elements, "Generated at 12:09:57")
     assert first == second
+
+
+async def test_form_progress_lists_what_is_left(browser, mock_ats):
+    """The agent gets an explicit checklist, not just 20 lines of attributes."""
+    await _goto(browser, f"{mock_ats}/jobs/MJ-1001")
+    toolbox = BrowserToolbox(ToolContext(browser))
+    await toolbox.execute(
+        AgentDecision(action=ActionType.CLICK_ELEMENT, target=ElementTarget(text="Apply"))
+    )
+
+    state = await toolbox.context.refresh()
+    empty = state.form_progress()
+    assert "0 of" in empty
+    assert "STILL EMPTY" in empty
+    assert "ALREADY FILLED" not in empty
+
+    element = next(e for e in state.elements if e.name == "full_name")
+    await toolbox.execute(
+        AgentDecision(
+            action=ActionType.FILL_FIELD,
+            target=ElementTarget(element_id=element.element_id),
+            value="Ana Souza",
+        )
+    )
+    state = await toolbox.context.refresh()
+    partial = state.form_progress()
+    assert "1 of" in partial
+    assert "do not refill" in partial
+    assert "Full name" in partial
