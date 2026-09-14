@@ -469,12 +469,28 @@ class BrowserToolbox:
         raw_path = decision.value or str(decision.args.get("path", ""))
         if not raw_path:
             raise ToolExecutionError("upload_file requires a file path")
-        if not resolved.selector:
-            file_inputs = [e for e in state.elements if e.type == "file"]
+        # Redirect to the page's real file input when the agent points somewhere else.
+        # Calling set_input_files on a text box raises an opaque Playwright error; the
+        # useful signal is usually "you are not on the upload step yet".
+        file_inputs = [e for e in state.elements if e.type == "file"]
+        targeting_a_file_input = (
+            resolved.element is not None and resolved.element.type == "file"
+        )
+        if not resolved.selector or not targeting_a_file_input:
             if not file_inputs:
                 return await _result(
                     self.context, decision, success=False, url_before=url, fingerprint_before=fp,
-                    error="No file input found on the page",
+                    error=(
+                        "There is no file input on this page, so nothing can be uploaded "
+                        "here. You are probably not on the document step yet - advance "
+                        "the form first."
+                    ),
+                )
+            if resolved.selector and not targeting_a_file_input:
+                log.info(
+                    "upload_file targeted %s, which is not a file input; using %s instead",
+                    resolved.selector,
+                    file_inputs[0].selector,
                 )
             resolved = ResolvedTarget(file_inputs[0], file_inputs[0].selector, "only_file_input")
 

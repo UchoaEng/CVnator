@@ -201,6 +201,10 @@ class PolicyEngine:
         if numeric_claim is not None:
             report.violations.extend(numeric_claim)
 
+        identity_claim = self._identity_field_claim(label, value, context)
+        if identity_claim is not None:
+            report.violations.extend(identity_claim)
+
         if report.ok:
             return None
 
@@ -214,6 +218,90 @@ class PolicyEngine:
             ),
             intervention_kind=InterventionKind.UNKNOWN_PERSONAL_INFORMATION.value,
         )
+
+    #: Labels asking for the candidate's own employer, and for their own job title.
+    _EMPLOYER_LABEL = re.compile(
+        r"\b(current|most recent|previous|last|présent)?\s*"
+        r"(company|employer|organi[sz]ation|empresa|empregador|organiza[çc][ãa]o)\b",
+        re.IGNORECASE,
+    )
+    _TITLE_LABEL = re.compile(
+        r"\b(job\s*title|position|role|current title|cargo|fun[çc][ãa]o|puesto)\b",
+        re.IGNORECASE,
+    )
+
+    def _identity_field_claim(self, label: str, value: str, context: PolicyContext):
+        """Guard fields that ask *who the candidate worked for*, or *as what*.
+
+        This exists because of a specific observed failure: asked for "Company" under
+        "Most recent experience", the agent filled in the company it was applying to.
+        Nothing caught it - a bare company name trips no keyword rule, and the value
+        was perfectly plausible. The fix has to be positive rather than negative: the
+        answer must *match something in the profile*, not merely avoid looking wrong.
+        """
+        from rapidfuzz import fuzz
+
+        from cvnator.resume.fact_validator import Severity, Violation, ViolationKind
+
+        candidate = value.strip()
+        if not candidate or len(candidate) > 120:
+            return None
+
+        def matches(known: set[str]) -> bool:
+            needle = candidate.lower()
+            return any(
+                needle == entry or fuzz.token_set_ratio(needle, entry) >= 88
+                for entry in known
+                if entry
+            )
+
+        if self._EMPLOYER_LABEL.search(label):
+            employers = {e.company.strip().lower() for e in self.profile.experiences}
+            if not employers or matches(employers):
+                return None
+            most_recent = (
+                self.profile.experiences[0].company if self.profile.experiences else ""
+            )
+            extra = ""
+            if context.platform and candidate.lower() == context.platform.lower():
+                extra = " That is the platform name, not an employer."
+            elif fuzz.token_set_ratio(candidate.lower(), (context.field_label or "").lower()) > 90:
+                extra = ""
+            return [
+                Violation(
+                    kind=ViolationKind.INVENTED_ENTITY,
+                    severity=Severity.BLOCK,
+                    message=(
+                        f"Field '{label}' asks for the candidate's own employer, but "
+                        f"'{candidate}' is not one of their employers.{extra} "
+                        + (f"Use '{most_recent}'." if most_recent else "")
+                    ),
+                    context=label,
+                    evidence=candidate,
+                )
+            ]
+
+        if self._TITLE_LABEL.search(label):
+            titles = {e.job_title.strip().lower() for e in self.profile.experiences}
+            if not titles or matches(titles):
+                return None
+            most_recent = (
+                self.profile.experiences[0].job_title if self.profile.experiences else ""
+            )
+            return [
+                Violation(
+                    kind=ViolationKind.INVENTED_ENTITY,
+                    severity=Severity.BLOCK,
+                    message=(
+                        f"Field '{label}' asks for the candidate's own job title, but "
+                        f"'{candidate}' is not one they have held. "
+                        + (f"Use '{most_recent}'." if most_recent else "")
+                    ),
+                    context=label,
+                    evidence=candidate,
+                )
+            ]
+        return None
 
     def _numeric_field_claim(self, label: str, value: str):
         """Check a bare number typed into a "years of X" field.

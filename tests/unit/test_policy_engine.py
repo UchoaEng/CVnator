@@ -221,3 +221,79 @@ def test_a_generic_years_field_uses_total_experience(profile):
         ctx(profile, field_label="Total years of professional experience"),
     )
     assert verdict.outcome is PolicyOutcome.ALLOW
+
+
+def test_the_company_being_applied_to_is_not_the_candidates_employer(profile):
+    """The failure this rule exists for.
+
+    Asked for "Company" under "Most recent experience", the agent filled in the
+    company it was applying to. No keyword rule fires on a bare company name, and the
+    value looks entirely plausible — so the check has to be positive: the answer must
+    match an employer on file, not merely avoid looking wrong.
+    """
+    engine = PolicyEngine(profile)
+    verdict = engine.evaluate(
+        AgentDecision(
+            action=ActionType.FILL_FIELD,
+            target=ElementTarget(element_id="e1"),
+            value="Lumina Tecnologia",
+        ),
+        ctx(profile, field_label="Company"),
+    )
+    assert verdict.outcome is PolicyOutcome.BLOCK
+    assert "Acme Log" in verdict.reason  # names the employer it should have used
+
+
+@pytest.mark.parametrize("value", ["Acme Log", "acme log", "Acme  Log"])
+def test_a_real_employer_is_accepted(profile, value):
+    engine = PolicyEngine(profile)
+    verdict = engine.evaluate(
+        AgentDecision(
+            action=ActionType.FILL_FIELD, target=ElementTarget(element_id="e1"), value=value
+        ),
+        ctx(profile, field_label="Current or most recent company"),
+    )
+    assert verdict.outcome is PolicyOutcome.ALLOW
+
+
+def test_a_job_title_the_candidate_never_held_is_blocked(profile):
+    engine = PolicyEngine(profile)
+    verdict = engine.evaluate(
+        AgentDecision(
+            action=ActionType.FILL_FIELD,
+            target=ElementTarget(element_id="e0"),
+            value="Head of Engineering",
+        ),
+        ctx(profile, field_label="Current or most recent job title"),
+    )
+    assert verdict.outcome is PolicyOutcome.BLOCK
+    assert "Data Analyst" in verdict.reason
+
+
+def test_the_real_job_title_is_accepted(profile):
+    engine = PolicyEngine(profile)
+    verdict = engine.evaluate(
+        AgentDecision(
+            action=ActionType.FILL_FIELD,
+            target=ElementTarget(element_id="e0"),
+            value="Data Analyst",
+        ),
+        ctx(profile, field_label="Current or most recent job title"),
+    )
+    assert verdict.outcome is PolicyOutcome.ALLOW
+
+
+def test_the_identity_guard_does_not_touch_unrelated_fields(profile):
+    engine = PolicyEngine(profile)
+    for label, value in (
+        ("Full name", "Ana Souza"),
+        ("City of residence", "São Paulo"),
+        ("Email address", "ana@example.com"),
+    ):
+        verdict = engine.evaluate(
+            AgentDecision(
+                action=ActionType.FILL_FIELD, target=ElementTarget(element_id="e0"), value=value
+            ),
+            ctx(profile, field_label=label),
+        )
+        assert verdict.outcome is PolicyOutcome.ALLOW, f"{label} was wrongly gated"

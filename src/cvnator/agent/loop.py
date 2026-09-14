@@ -230,7 +230,19 @@ class FormAgent:
         if self.profile.experiences:
             current = self.profile.experiences[0]
             lines.append(f"Most recent role: {current.job_title} at {current.company}")
-        lines.append("Skills: " + ", ".join(s.name for s in self.profile.skills[:40]))
+        # Years per skill matter: without them the agent cannot answer "how many years
+        # of SQL?" truthfully and escalates to the user for data already on file.
+        skill_bits: list[str] = []
+        for skill in self.profile.skills[:40]:
+            years = skill.years_of_experience
+            if years is None:
+                years = self.profile.years_with_skill(skill.name)
+            skill_bits.append(f"{skill.name} ({years:g}y)" if years is not None else skill.name)
+        lines.append("Skills: " + ", ".join(skill_bits))
+        lines.append(
+            "A skill shown with (Ny) means N years of experience with it - use that "
+            "number when a form asks, never the total."
+        )
         if self.profile.languages:
             lines.append(
                 "Languages: "
@@ -288,13 +300,24 @@ class FormAgent:
             self._profile_digest(),
         ]
         if resume_path is not None:
-            blocks += [
-                "",
-                f"A tailored resume has already been generated for this application "
-                f"({resume_path.name}). When the form asks for a CV, use `upload_file` "
-                f"targeting the file input and leave `value` empty - the runtime "
-                f"supplies the file. You never choose files from disk.",
-            ]
+            # Mentioning the file only when the page can accept one stops the agent
+            # trying to upload it three steps early.
+            has_file_input = any(e.type == "file" for e in state.elements)
+            if has_file_input:
+                blocks += [
+                    "",
+                    f"THIS PAGE HAS A FILE INPUT and a tailored resume is ready "
+                    f"({resume_path.name}). Use `upload_file` on it and leave `value` "
+                    f"empty - the runtime supplies the file. You never choose files "
+                    f"from disk.",
+                ]
+            else:
+                blocks += [
+                    "",
+                    f"A tailored resume ({resume_path.name}) is ready for the document "
+                    f"step. This page has no file input, so there is nothing to upload "
+                    f"yet - complete this step first.",
+                ]
         if known:
             blocks += [
                 "",
