@@ -195,6 +195,38 @@ def test_a_url_change_alone_does_not_confirm():
     assert not validate_after_submit(before, after).confirmed
 
 
+def test_reaching_a_review_page_is_not_a_submission():
+    """The false positive that made this rule strict.
+
+    Moving from the questions step to the review step changes the URL and removes
+    every input. Under an "any two weak signals" rule that read as a confirmed
+    submission, and an application that had submitted nothing was recorded as
+    SUBMITTED — with its tailored CV deleted on the strength of it.
+    """
+    before = make_state(
+        url="https://ats.example/apply/tok/4",
+        text="Screening questions",
+        elements=[element("a"), element("b"), element("c"), element("d")],
+    )
+    after = make_state(
+        url="https://ats.example/apply/tok/5",
+        text="Review your application. Full name: Ana Souza. Submit application",
+        elements=[SUBMIT_BUTTON],
+    )
+    evidence = validate_after_submit(before, after)
+    assert not evidence.confirmed
+    # The weak signals are still recorded — they are evidence, just not proof.
+    assert evidence.signals
+
+
+def test_weak_signals_never_confirm_without_a_phrase_or_reference():
+    before = make_state(elements=[element("a"), element("b"), element("c")])
+    after = make_state(url="https://ats.example/complete", text="All done", elements=[])
+    evidence = validate_after_submit(before, after)
+    assert len(evidence.signals) >= 2, "this is exactly the case the old rule accepted"
+    assert not evidence.confirmed
+
+
 def test_nothing_happening_does_not_confirm():
     state = make_state()
     evidence = validate_after_submit(state, state)

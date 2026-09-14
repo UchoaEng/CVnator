@@ -744,20 +744,29 @@ class AgentSession:
             session.flush()
             return row.id
 
-    def _transition(self, application_id: int, target: ApplicationState, reason: str) -> None:
+    def _transition(
+        self, application_id: int, target: ApplicationState, reason: str
+    ) -> bool:
+        """Record a state change. Returns False when the edge was refused.
+
+        Callers must honour the return value: an agent claiming SUBMITTED from
+        APPLYING is refused here, and anything downstream that acts on "submitted"
+        (marking the job applied, deleting the tailored CV) must not run on a
+        transition that did not happen.
+        """
         with session_scope() as session:
             row = session.get(ApplicationRow, application_id)
             if row is None:
-                return
+                return False
             current = ApplicationState(row.state)
             if current == target:
-                return
+                return True
             if not can_transition(current, target):
                 log.warning(
                     "Refusing illegal transition %s -> %s for application %s",
                     current.value, target.value, application_id,
                 )
-                return
+                return False
             session.add(
                 StateTransitionRow(
                     application_id=application_id,
@@ -771,6 +780,7 @@ class AgentSession:
                        target.value, reason)
         self.emit("application_state", {"id": application_id, "state": target.value,
                                         "reason": reason})
+        return True
 
     def _close_application(
         self, application_id: int, state: ApplicationState, *, errors: list[str] | None = None
@@ -805,9 +815,27 @@ class AgentSession:
                 )
 
         target: ApplicationState = outcome.state
-        self._transition(application_id, target, "Agent loop finished")
+        recorded = self._transition(application_id, target, "Agent loop finished")
 
-        if target is ApplicationState.SUBMITTED:
+        if target is ApplicationState.SUBMITTED and not recorded:
+            # The agent believes it submitted, but the state machine would not accept
+            # the edge - so the application never legitimately reached SUBMITTED. Do
+            # not mark the job applied and do not delete the tailored CV.
+            log.warning(
+                "Application %s reported SUBMITTED but the transition was refused; "
+                "treating it as failed and keeping the generated resume",
+                application_id,
+            )
+            outcome.errors.append(
+                "Agent reported a submission the state machine could not accept"
+            )
+            self.metrics.applications_failed += 1
+            self._release_resume_hold(resume_path)
+            self.emit(
+                "application_failed",
+                {"job": job.role, "company": job.company, "reason": "unverified submission"},
+            )
+        elif target is ApplicationState.SUBMITTED:
             self.metrics.applications_completed += 1
             self.rate_limiter.record_application(job.platform)
             with session_scope() as session:

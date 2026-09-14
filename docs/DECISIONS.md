@@ -296,3 +296,35 @@ something and not telling the agent — not the agent being incapable.
 
 When an escalation looks unnecessary, the first question is not "why did the model get
 this wrong" but "what did we fail to put in front of it".
+
+---
+
+## ADR-019 — Only a signal that can mean nothing else confirms a submission **[from a run]**
+
+**Decision.** `validate_after_submit` confirms on an explicit confirmation phrase or
+a reference number, and on nothing else. Weak signals are still recorded as evidence,
+but no combination of them confirms.
+
+**Why.** The original rule was "a phrase or a reference, **or any two weaker
+signals**". That produced the worst failure observed in this project: the agent
+advanced from the screening-questions step to the review step, and the validator saw
+
+* the URL changed to `.../apply/<token>/5`
+* the form's inputs were gone
+
+— two weak signals agreeing — and recorded an application as **SUBMITTED that had
+submitted nothing**. The mock ATS still held `submitted: false`.
+
+Both signals are real. Both are also exactly what a review page looks like. Their
+conjunction carries no more meaning than either alone.
+
+**What caught it and what did not.** The state machine refused the illegal
+`APPLYING → SUBMITTED` edge, so the database was never corrupted. But
+`_transition` returned `None`, and the caller went on to act on the agent's *claim*:
+it deleted the tailored CV for an application that was never sent. `_transition` now
+returns whether the edge was recorded, and everything downstream of "submitted" is
+gated on that.
+
+**The principle.** Prefer a missed confirmation to a false one. Failing to notice a
+real submission is a nuisance the user can correct; recording one that never happened
+is a lie the user has no way to detect, and it poisons the history they rely on.

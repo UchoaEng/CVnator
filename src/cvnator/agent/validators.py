@@ -227,9 +227,18 @@ def validate_after_submit(
     if form_fields_before >= 3 and form_fields_after == 0:
         evidence.signals.append("the application form is no longer present")
 
-    # A phrase alone is enough; otherwise two weaker signals must agree.
-    strong = bool(match) or bool(evidence.reference)
-    evidence.confirmed = (strong or len(evidence.signals) >= 2) and not evidence.already_applied
+    # Confirmation requires a signal that can ONLY mean "this was submitted": an
+    # explicit confirmation phrase, or a reference number.
+    #
+    # An earlier version also accepted "any two weaker signals", which is unsound and
+    # produced a false positive in a real run: advancing from the questions step to
+    # the review step changes the URL and removes the inputs, so a page that had
+    # submitted nothing was recorded as SUBMITTED. Claiming a submission that did not
+    # happen is worse than failing to notice one that did, because the user stops
+    # checking. Weak signals are recorded as evidence but never confirm on their own.
+    evidence.confirmed = (
+        (bool(match) or bool(evidence.reference)) and not evidence.already_applied
+    )
 
     if evidence.confirmed:
         log.info("Submission confirmed by: %s", "; ".join(evidence.signals))
