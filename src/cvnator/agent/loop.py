@@ -552,14 +552,27 @@ class FormAgent:
                 cycle.policy_outcome = "allow"
                 cycle.success = True
                 outcome.cycles.append(cycle)
-                outcome.state = (
-                    ApplicationState.SUBMITTED
-                    if outcome.evidence and outcome.evidence.confirmed
-                    else ApplicationState.APPLYING
-                )
+
+                # Check the page rather than the claim. The agent may have submitted
+                # through an ordinary click on a review screen without ever calling
+                # submit_application, in which case no evidence has been gathered yet -
+                # and refusing on that basis records a real submission as a failure.
+                # The same strict rule applies: a confirmation phrase or a reference.
                 if not (outcome.evidence and outcome.evidence.confirmed):
+                    outcome.evidence = validate_after_submit(state, state)
+
+                if outcome.evidence.confirmed:
+                    outcome.state = ApplicationState.SUBMITTED
+                    if Checkpoint.SUBMITTED not in outcome.checkpoints:
+                        outcome.checkpoints.append(Checkpoint.SUBMITTED)
+                    log.transition(
+                        "Application SUBMITTED on finish: %s",
+                        "; ".join(outcome.evidence.signals),
+                    )
+                else:
                     outcome.errors.append(
-                        "Agent called finish without confirmed submission evidence"
+                        "Agent called finish but the page shows no confirmation phrase "
+                        "or reference number; the submission could not be verified"
                     )
                     outcome.state = ApplicationState.FAILED
                 return outcome

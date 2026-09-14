@@ -423,3 +423,30 @@ def test_the_textarea_label_is_used_when_the_question_is_not_quoted():
         ]
     )
     assert _is_open_motivation_question("the required field is empty", state)
+
+
+def test_a_confirmation_page_confirms_even_without_a_prior_submit_call():
+    """Comparing a confirmation page with itself must still confirm.
+
+    The agent can submit through an ordinary click on a review screen and never call
+    submit_application, so no evidence is gathered. Checking the page on `finish`
+    covers that; comparing the page to itself gives no URL change and no vanished
+    form, so only the phrase and the reference are available - which is the point.
+    """
+    done = make_state(
+        url="https://ats.example/apply/tok/done",
+        text="Application submitted. Thank you for applying. Your reference number is MA-370123.",
+        elements=[],
+    )
+    evidence = validate_after_submit(done, done)
+    assert evidence.confirmed
+    assert evidence.reference == "MA-370123"
+
+
+def test_a_review_page_compared_with_itself_does_not_confirm():
+    review = make_state(
+        url="https://ats.example/apply/tok/5",
+        text="Review your application. Full name: Ana Souza.",
+        elements=[SUBMIT_BUTTON],
+    )
+    assert not validate_after_submit(review, review).confirmed
