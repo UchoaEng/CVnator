@@ -336,3 +336,58 @@ def test_block_detection_ignores_markup_and_scripts():
 def test_a_genuine_block_message_is_still_caught():
     assert detect_block("We have detected unusual traffic from your network.")
     assert detect_block("Your account has been restricted.")
+
+
+# ------------------------------------------------- refusing needless escalation
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Why do you want to work at Northwind?",
+        "Why are you interested in this role?",
+        "What motivates you about this position?",
+        "Tell us about yourself",
+        "Por que você quer trabalhar conosco?",
+    ],
+)
+def test_motivation_questions_are_recognised_as_answerable(question):
+    """These need no user input: they ask for motivation, not a missing fact."""
+    from cvnator.agent.loop import _is_open_motivation_question
+
+    assert _is_open_motivation_question(question, make_state())
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What is your desired salary?",
+        "What is your notice period?",
+        "Do you hold an AWS certification?",
+        "What is your national insurance number?",
+    ],
+)
+def test_factual_questions_still_escalate(question):
+    """The guard must not swallow questions that genuinely need the user."""
+    from cvnator.agent.loop import _is_open_motivation_question
+
+    assert not _is_open_motivation_question(question, make_state())
+
+
+def test_the_textarea_label_is_used_when_the_question_is_not_quoted():
+    """The agent does not always quote the label it is looking at."""
+    from cvnator.agent.loop import _is_open_motivation_question
+
+    state = make_state(
+        elements=[
+            element(
+                "motivation",
+                tag="textarea",
+                type_=None,
+                label="Why do you want to work at Northwind Analytics? *",
+                value="",
+                required=True,
+            )
+        ]
+    )
+    assert _is_open_motivation_question("the required field is empty", state)

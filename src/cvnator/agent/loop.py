@@ -70,6 +70,34 @@ log = get_logger(__name__)
 #: Signature: (request) -> answer text, or None if the user declined / is unavailable.
 AskUser = Callable[[UserActionRequest], Awaitable[str | None]]
 
+#: Questions of this shape are answerable from the posting and the candidate's own
+#: history. They ask for motivation, not for a fact the system might be missing.
+_MOTIVATION_QUESTION = re.compile(
+    r"(why (do|would) you (want|like) to (work|join)"
+    r"|why (are you interested|this (role|company|position))"
+    r"|what (interests|attracts|motivates) you"
+    r"|tell us about yourself"
+    r"|por que (voc[êe] )?(quer|gostaria|deseja)"
+    r"|o que (te )?motiva|fale (um pouco )?sobre voc[êe]"
+    r"|why do you want to work at)",
+    re.IGNORECASE,
+)
+
+
+def _is_open_motivation_question(question: str, state: PageState) -> bool:
+    """True when the question is motivational rather than factual.
+
+    Checks the question the agent quoted and, failing that, the labels of any
+    free-text areas on the page - the agent does not always quote the label exactly.
+    """
+    if _MOTIVATION_QUESTION.search(question):
+        return True
+    for element in state.elements:
+        if element.tag == "textarea" and _MOTIVATION_QUESTION.search(element.label or ""):
+            return True
+    return False
+
+
 #: Actions for which "the page did not change" is genuine evidence of failure.
 #: Filling a text input is not one of them.
 _PAGE_CHANGING_ACTIONS = frozenset(
@@ -706,6 +734,29 @@ class FormAgent:
                     url_after=state.url,
                     page_fingerprint=state.fingerprint,
                     data={"answer": remembered.value, "source": "memory"},
+                )
+                return True, result, checkpoint, pre_submission_passed, resume_uploaded
+
+            # Refuse escalations the system knows are unnecessary. "Why do you want
+            # to work here?" is answerable from the posting plus the candidate's own
+            # experience; not knowing the employer is not missing *candidate* data.
+            # Prompt guidance alone did not hold, so this is enforced rather than asked.
+            if _is_open_motivation_question(str(question), state):
+                result = ToolResult(
+                    success=False,
+                    action=action,
+                    error=(
+                        "That question does not need the user. It asks for motivation, "
+                        "not for a fact about the candidate. Compose the answer yourself "
+                        "from (a) the responsibilities this posting states and (b) work "
+                        "the candidate has actually done. Assert nothing about the "
+                        "company beyond what the posting says, and claim no prior "
+                        "familiarity with it. Then fill the field."
+                    ),
+                    url_before=state.url,
+                    url_after=state.url,
+                    page_fingerprint=state.fingerprint,
+                    data={"refused_escalation": "open_motivation_question"},
                 )
                 return True, result, checkpoint, pre_submission_passed, resume_uploaded
 
