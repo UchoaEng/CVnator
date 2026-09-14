@@ -393,22 +393,49 @@ class BrowserToolbox:
         # Verify the field actually holds what we intended.
         fresh = await self.context.refresh()
         actual = None
+        actual_length = None
         if resolved.element is not None:
             updated = next(
                 (e for e in fresh.elements if e.selector == resolved.element.selector), None
             )
-            actual = updated.value if updated else None
-        matched = actual is None or actual.strip() == value.strip()
+            if updated is not None:
+                actual = updated.value
+                actual_length = updated.value_length
+
+        # The echoed value is clipped for transport, so a long answer never compares
+        # equal to what was typed. Verify the length and the surviving prefix instead -
+        # otherwise every multi-sentence answer reports a false mismatch and the agent
+        # rewrites text that landed perfectly.
+        if actual is None:
+            matched = True
+        elif actual_length is not None and actual_length != len(actual):
+            matched = (
+                actual_length == len(value.strip())
+                and value.strip().startswith(actual.strip()[:50])
+            )
+        else:
+            matched = actual.strip() == value.strip()
+
         return ToolResult(
             success=matched,
             action=decision.action,
-            error="" if matched else f"Field holds {actual!r} after filling {value!r}",
+            error=(
+                ""
+                if matched
+                else f"Field holds {actual!r} ({actual_length} chars) after filling "
+                f"{len(value)} chars"
+            ),
             observed_state=f"Filled via {resolved.strategy}",
             url_before=url,
             url_after=fresh.url,
             dom_changed=fresh.fingerprint != fp,
             page_fingerprint=fresh.fingerprint,
-            data={"selector": resolved.selector, "value_after": actual, "alerts": fresh.alerts},
+            data={
+                "selector": resolved.selector,
+                "value_after": actual,
+                "value_length": actual_length,
+                "alerts": fresh.alerts,
+            },
         )
 
     async def _do_type_text(

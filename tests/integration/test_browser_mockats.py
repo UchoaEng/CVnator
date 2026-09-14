@@ -600,3 +600,61 @@ async def test_a_radio_group_counts_as_one_requirement(browser, mock_ats, sample
     assert "choose one" not in after, after
     # The group moved from outstanding to done as a single unit.
     assert "authorized to work" in after.split("ALREADY FILLED")[-1].lower()
+
+
+async def test_filling_a_long_answer_reports_success(browser, mock_ats, sample_pdf):
+    """A multi-sentence answer must not read as a failed fill.
+
+    The echoed value is clipped at 200 characters for transport, so comparing it to
+    what was typed always mismatched — and the agent dutifully rewrote text that had
+    landed perfectly.
+    """
+    await _goto(browser, f"{mock_ats}/jobs/MJ-1001")
+    toolbox = BrowserToolbox(ToolContext(browser))
+    await toolbox.execute(
+        AgentDecision(action=ActionType.CLICK_ELEMENT, target=ElementTarget(text="Apply"))
+    )
+    await _reach_questions_step(toolbox, sample_pdf)
+
+    long_answer = (
+        "I have spent several years building operational dashboards and modelling "
+        "data in SQL, which is what this role describes. I would like to keep doing "
+        "that work somewhere it is central rather than incidental."
+    )
+    assert len(long_answer) > 200, "the point of the test is to exceed the transport clip"
+
+    state = await toolbox.context.refresh()
+    motivation = next(e for e in state.elements if e.name == "motivation")
+    result = await toolbox.execute(
+        AgentDecision(
+            action=ActionType.FILL_FIELD,
+            target=ElementTarget(element_id=motivation.element_id),
+            value=long_answer,
+        )
+    )
+    assert result.success, result.error
+    assert result.data["value_length"] == len(long_answer)
+
+
+async def test_a_genuinely_rejected_fill_still_reports_failure(browser, mock_ats):
+    """The relaxed comparison must not paper over a value the field refused."""
+    await _goto(browser, f"{mock_ats}/jobs/MJ-1001")
+    toolbox = BrowserToolbox(ToolContext(browser))
+    await toolbox.execute(
+        AgentDecision(action=ActionType.CLICK_ELEMENT, target=ElementTarget(text="Apply"))
+    )
+    await _fill_step_one(toolbox)
+
+    # maxlength is not set here, so use a number input given non-numeric text: the
+    # browser discards it and the field stays empty.
+    state = await toolbox.context.refresh()
+    years = next(e for e in state.elements if e.name == "years_experience")
+    result = await toolbox.execute(
+        AgentDecision(
+            action=ActionType.FILL_FIELD,
+            target=ElementTarget(element_id=years.element_id),
+            value="six point two",
+        )
+    )
+    assert not result.success
+    assert result.error
