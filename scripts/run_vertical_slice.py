@@ -16,9 +16,11 @@ leaves the machine. Run it with::
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -28,8 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from cvnator.agent.orchestrator import AgentSession  # noqa: E402
 from cvnator.ai.gateway import get_gateway  # noqa: E402
 from cvnator.config import get_settings  # noqa: E402
-from cvnator.db.base import session_scope  # noqa: E402
 from cvnator.db import repositories as repo  # noqa: E402
+from cvnator.db.base import session_scope  # noqa: E402
 from cvnator.domain.profile import (  # noqa: E402
     CandidateMasterProfile,
     Education,
@@ -167,10 +169,11 @@ async def ensure_mock_running() -> None:
         await client.post(f"{MOCK_URL}/_debug/reset")
 
 
-async def main() -> int:
+async def main() -> dict:
     setup_logging("INFO")
     settings = get_settings()
     await ensure_mock_running()
+    started_at = time.monotonic()
 
     profile = build_profile()
     search = build_search()
@@ -234,6 +237,7 @@ async def main() -> int:
     print(json.dumps(submitted, indent=2, ensure_ascii=False)[:2500])
 
     print("\n=== Application history ===")
+    applications = []
     with session_scope() as session:
         for application in repo.list_applications(session, limit=10):
             print(
@@ -243,14 +247,57 @@ async def main() -> int:
                 f"checkpoints={application['checkpoints']} | "
                 f"errors={application['errors']}"
             )
+            applications.append(
+                {
+                    "state": application["state"],
+                    "role": application["job"]["role"],
+                    "company": application["job"]["company"],
+                    "match_score": application["job"]["match_score"],
+                    "checkpoints": len(application["checkpoints"]),
+                    "errors": application["errors"],
+                }
+            )
 
     print("\n=== Temporary resume files remaining ===")
     leftovers = list(settings.temp_resumes_dir.glob("application_*"))
     print(f"  {len(leftovers)} file(s): {[p.name for p in leftovers]}")
 
     await get_gateway().aclose()
-    return 0 if submitted else 1
+
+    return {
+        "succeeded": bool(submitted),
+        "wall_seconds": round(time.monotonic() - started_at, 1),
+        "metrics": session_obj.metrics.as_dict(),
+        "submitted": {
+            token: {
+                "job_id": record.get("job_id"),
+                "reference": record.get("reference"),
+                "fields": len(record.get("data", {})),
+            }
+            for token, record in submitted.items()
+        },
+        "applications": applications,
+        "user_action_requests": [
+            payload for kind, payload in events if kind == "user_action_required"
+        ],
+        "errors": [payload for kind, payload in events if kind == "error"],
+        "leftover_temp_files": [p.name for p in leftovers],
+    }
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--json-out",
+        type=Path,
+        default=None,
+        help="Also write a machine-readable summary of the run to this path.",
+    )
+    args = parser.parse_args()
+    outcome = asyncio.run(main())
+    if args.json_out is not None:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(
+            json.dumps(outcome, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    raise SystemExit(0 if outcome["succeeded"] else 1)

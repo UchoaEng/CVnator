@@ -139,3 +139,25 @@ def test_a_failed_application_releases_the_hold_without_deleting(
 def test_cleanup_is_a_no_op_without_a_resume(session_under_test, db_session, tmp_path):
     application_id, _pdf, _version = _prepare_application(db_session, tmp_path)
     session_under_test._cleanup_resume(application_id, None, "abc123")  # must not raise
+
+
+def test_the_session_limit_counts_submissions_not_attempts(session_under_test) -> None:
+    """A limit of N must deliver N applications, not N-1.
+
+    Counting *started* applications blocked the Nth application from submitting by
+    virtue of its own start: with a limit of 2 the agent filled both forms, reached
+    the review screen on the second, and abandoned it there.
+    """
+    session = session_under_test
+    session.autonomy.session_application_limit = 2
+
+    session.metrics.applications_started = 1
+    assert session.submissions_this_session == 0
+
+    # Second application started, first one submitted: still under the limit.
+    session.metrics.applications_started = 2
+    session.metrics.applications_completed = 1
+    assert session.submissions_this_session < session.autonomy.session_application_limit
+
+    session.metrics.applications_completed = 2
+    assert session.submissions_this_session == session.autonomy.session_application_limit

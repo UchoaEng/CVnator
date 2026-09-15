@@ -112,6 +112,11 @@ _PAGE_CHANGING_ACTIONS = frozenset(
     }
 )
 
+#: How often the agent may be sent back after claiming to have finished without the
+#: page confirming it. Two is enough for the common cause (one unclicked control on a
+#: review screen) and small enough that a confused agent still terminates.
+MAX_FINISH_REJECTIONS = 2
+
 _AGENT_SYSTEM = """\
 You are the decision-making core of an autonomous job application agent. You control a
 real browser through tools. You emit exactly ONE action per turn as JSON.
@@ -477,6 +482,7 @@ class FormAgent:
         pre_submission_passed = False
         resume_uploaded = False
         retry_count = 0
+        finish_rejections = 0
 
         while True:
             state = await self.toolbox.context.refresh()
@@ -550,7 +556,6 @@ class FormAgent:
             # --- terminal actions the agent may choose itself ---------------------
             if decision.action is ActionType.FINISH:
                 cycle.policy_outcome = "allow"
-                cycle.success = True
                 outcome.cycles.append(cycle)
 
                 # Check the page rather than the claim. The agent may have submitted
@@ -562,6 +567,7 @@ class FormAgent:
                     outcome.evidence = validate_after_submit(state, state)
 
                 if outcome.evidence.confirmed:
+                    cycle.success = True
                     outcome.state = ApplicationState.SUBMITTED
                     if Checkpoint.SUBMITTED not in outcome.checkpoints:
                         outcome.checkpoints.append(Checkpoint.SUBMITTED)
@@ -569,12 +575,37 @@ class FormAgent:
                         "Application SUBMITTED on finish: %s",
                         "; ".join(outcome.evidence.signals),
                     )
-                else:
-                    outcome.errors.append(
-                        "Agent called finish but the page shows no confirmation phrase "
-                        "or reference number; the submission could not be verified"
+                    return outcome
+
+                # Refusing here is right, but a refusal the agent cannot act on costs
+                # the application: the usual cause is one unclicked control on a review
+                # screen. Send it back with the reason and a move, a bounded number of
+                # times - the counter is what keeps this from becoming a finish loop.
+                finish_rejections += 1
+                if (
+                    finish_rejections <= MAX_FINISH_REJECTIONS
+                    and self.watchdog.steps < self.watchdog.max_steps
+                ):
+                    log.warning(
+                        "Finish refused (%d/%d): no confirmation on %s",
+                        finish_rejections, MAX_FINISH_REJECTIONS, state.url,
                     )
-                    outcome.state = ApplicationState.FAILED
+                    last_result = None
+                    recovery_hint = (
+                        f"You called finish, but the page at {state.url} shows no "
+                        "confirmation message and no reference number, so the application "
+                        "is NOT submitted. Re-read the page: if it is a review step, click "
+                        "the control that finalises the application; if a required field is "
+                        "still rejected, fix that first. Only finish once the page itself "
+                        "confirms the submission."
+                    )
+                    continue
+
+                outcome.errors.append(
+                    "Agent called finish but the page shows no confirmation phrase "
+                    "or reference number; the submission could not be verified"
+                )
+                outcome.state = ApplicationState.FAILED
                 return outcome
 
             if decision.action is ActionType.ABANDON:
@@ -871,15 +902,29 @@ class FormAgent:
                     outcome.checkpoints.append(Checkpoint.SUBMITTED)
                 outcome.state = ApplicationState.SUBMITTED
                 log.transition("Application SUBMITTED: %s", "; ".join(evidence.signals))
+            # An unconfirmed submit is usually not a dead end: the click landed on an
+            # intermediate step. Saying only "could not be confirmed" invites the agent
+            # to give up one control short of the end, so name the next move instead.
+            if evidence.confirmed:
+                submit_error = ""
+            elif after.url != before.url or after.fingerprint != before.fingerprint:
+                submit_error = (
+                    f"The click moved the page to {after.url} but nothing there confirms a "
+                    "submission - this is most likely an intermediate step such as a review "
+                    "screen. Re-read the page and click the control that actually finalises "
+                    "the application. The application is NOT submitted until the page shows "
+                    "a confirmation message or a reference number."
+                )
+            else:
+                submit_error = (
+                    "The click did not change the page, so nothing was submitted. Re-read "
+                    "the page and choose the control that actually submits the application; "
+                    "a required field may still be rejected."
+                )
             result = ToolResult(
                 success=evidence.confirmed,
                 action=action,
-                error=(
-                    ""
-                    if evidence.confirmed
-                    else "Submission could not be confirmed from the page. Do NOT assume it "
-                         "succeeded; look for a confirmation, or report failure."
-                ),
+                error=submit_error,
                 observed_state="; ".join(evidence.signals) or click_result.observed_state,
                 url_before=before.url,
                 url_after=after.url,

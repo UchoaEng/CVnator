@@ -618,7 +618,7 @@ class AgentSession:
                 job,
                 resume_path=resume_path,
                 applications_today=self.rate_limiter.applications_today(job.platform),
-                applications_this_session=self.metrics.applications_started,
+                applications_this_session=self.submissions_this_session,
             )
 
         self.metrics.agent_steps_total += len(outcome.cycles)
@@ -900,6 +900,17 @@ class AgentSession:
                 version.file_deleted = True
         log.info("Deleted %s temporary resume artifact(s); the recipe is retained", freed)
         self.emit("artifacts_cleaned", {"application_id": application_id, "deleted": freed})
+
+    @property
+    def submissions_this_session(self) -> int:
+        """How many applications this session has actually submitted.
+
+        The session limit caps *submissions*, not attempts. Counting started
+        applications instead makes the limit off by one: the Nth application is
+        blocked from submitting by its own start, so a limit of 2 delivers one
+        application and abandons the other at the review screen.
+        """
+        return self.metrics.applications_completed
 
     def _release_resume_hold(self, resume_path: Path | None) -> None:
         if resume_path is None:
