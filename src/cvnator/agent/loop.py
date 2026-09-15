@@ -117,6 +117,10 @@ _PAGE_CHANGING_ACTIONS = frozenset(
 #: review screen) and small enough that a confused agent still terminates.
 MAX_FINISH_REJECTIONS = 2
 
+#: How many unreadable model answers one application tolerates before it is
+#: recorded as failed. A truncated answer is a bad turn, not a bad application.
+MAX_PLANNING_FAILURES = 2
+
 _AGENT_SYSTEM = """\
 You are the decision-making core of an autonomous job application agent. You control a
 real browser through tools. You emit exactly ONE action per turn as JSON.
@@ -424,7 +428,7 @@ class FormAgent:
             ChatMessage(role="user", content=context),
         ]
         return await self.gateway.structured(
-            ModelRole.REASONING, AgentDecision, messages, temperature=0.1, max_tokens=1536
+            ModelRole.REASONING, AgentDecision, messages, temperature=0.1, max_tokens=2048
         )
 
     # ---------------------------------------------------------------- user input
@@ -483,6 +487,7 @@ class FormAgent:
         resume_uploaded = False
         retry_count = 0
         finish_rejections = 0
+        planning_failures = 0
 
         while True:
             state = await self.toolbox.context.refresh()
@@ -535,9 +540,26 @@ class FormAgent:
             try:
                 decision = await self._plan(context)
             except Exception as exc:
-                outcome.errors.append(f"Planning failed: {exc}")
-                outcome.state = ApplicationState.FAILED
-                return outcome
+                # A malformed answer is not a reason to throw the application away.
+                # The usual cause is the model narrating its way past the token
+                # budget mid-JSON, and the usual cure is asking again for a short
+                # one - so ask again, a bounded number of times, and say why.
+                planning_failures += 1
+                if planning_failures > MAX_PLANNING_FAILURES:
+                    outcome.errors.append(f"Planning failed: {exc}")
+                    outcome.state = ApplicationState.FAILED
+                    return outcome
+                log.warning(
+                    "Planning failed (%d/%d), asking again: %s",
+                    planning_failures, MAX_PLANNING_FAILURES, str(exc)[:200],
+                )
+                recovery_hint = (
+                    "Your previous answer could not be read as a decision - most likely "
+                    "it was cut off because it was too long. Answer again and keep every "
+                    "field short: one sentence for 'reason', a few words for 'state'. "
+                    "Decide the single next action."
+                )
+                continue
 
             cycle = AgentCycle(
                 index=self.watchdog.steps,

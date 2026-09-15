@@ -187,8 +187,15 @@ def summarise(results: list[dict]) -> dict:
             states[application["state"]] = states.get(application["state"], 0) + 1
     summary["application_states"] = dict(sorted(states.items()))
 
-    leftovers = [len(r.get("leftover_temp_files", [])) for r in with_metrics]
-    summary["runs_leaking_temp_files"] = sum(1 for n in leftovers if n)
+    # A tailored CV left on disk is only a leak when its application was submitted.
+    # An application that failed keeps its file deliberately: deleting the CV for an
+    # unsent application is the thing the cleanup path is forbidden to do.
+    summary["runs_leaking_temp_files"] = sum(
+        1
+        for result in with_metrics
+        if result.get("leftover_temp_files")
+        and all(a["state"] == "SUBMITTED" for a in result.get("applications", []))
+    )
 
     return summary
 
@@ -229,7 +236,10 @@ def print_report(summary: dict, results: list[dict]) -> None:
             )
 
     print(f"\n  application states: {summary['application_states']}")
-    print(f"  runs leaking temporary files: {summary['runs_leaking_temp_files']}")
+    print(
+        "  runs leaving a tailored CV behind after submitting: "
+        f"{summary['runs_leaking_temp_files']}"
+    )
     if summary["failures"]:
         print("\n  failures:")
         for failure in summary["failures"]:

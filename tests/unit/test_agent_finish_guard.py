@@ -9,6 +9,9 @@ and gave up one control short of the end.
 So the guard now sends the agent back with the reason and a move -- a bounded
 number of times. These tests pin all three halves of that: it refuses, it
 recovers, and it still terminates.
+
+The last test covers the same shape of mistake one layer up: an answer the model
+truncated mid-JSON used to end the application outright.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from cvnator.agent.loop import MAX_FINISH_REJECTIONS, FormAgent
+from cvnator.agent.loop import MAX_FINISH_REJECTIONS, MAX_PLANNING_FAILURES, FormAgent
 from cvnator.agent.policy import PolicyEngine
 from cvnator.browser.perception import PageElement, PageState
 from cvnator.domain.actions import ActionType, AgentDecision, ElementTarget
@@ -79,7 +82,7 @@ CONFIRMED_PAGE = _page("http://127.0.0.1:8099/apply/tok/done", CONFIRMATION_PAGE
 class _ScriptedGateway:
     """Returns pre-written decisions and records the context it was asked about."""
 
-    def __init__(self, decisions: Sequence[AgentDecision]) -> None:
+    def __init__(self, decisions: Sequence[AgentDecision | Exception]) -> None:
         self._decisions = list(decisions)
         self.contexts: list[str] = []
 
@@ -87,7 +90,10 @@ class _ScriptedGateway:
         self.contexts.append(messages[-1].content)
         if not self._decisions:
             raise AssertionError("the agent asked for more decisions than the test scripted")
-        return self._decisions.pop(0)
+        scripted = self._decisions.pop(0)
+        if isinstance(scripted, Exception):
+            raise scripted
+        return scripted
 
 
 class _ScriptedContext:
@@ -192,3 +198,35 @@ async def test_a_repeated_unverified_finish_terminates_as_a_failure(db_session) 
     assert outcome.state is ApplicationState.FAILED
     assert len(gateway.contexts) == MAX_FINISH_REJECTIONS + 1
     assert any("could not be verified" in error for error in outcome.errors)
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_model_answer_is_retried_not_fatal(db_session) -> None:
+    """A truncated answer is a bad turn, not a bad application.
+
+    The observed failure: the model narrated its way past the token budget while
+    describing the review page, the JSON came back cut off, and an application that
+    was one click from done was recorded as FAILED.
+    """
+    truncated = ValueError('No JSON object found in response: \'{"goal": "Complete')
+    gateway = _ScriptedGateway([truncated, _finish()])
+    agent = _agent(gateway, [REVIEW_PAGE, CONFIRMED_PAGE], db_session)
+
+    outcome = await agent.run(_JOB, resume_path=Path("resume.pdf"))
+
+    assert outcome.state is ApplicationState.SUBMITTED
+    assert "cut off" in gateway.contexts[1]
+
+
+@pytest.mark.asyncio
+async def test_unreadable_answers_still_end_the_application_eventually(db_session) -> None:
+    gateway = _ScriptedGateway(
+        [ValueError("No JSON object found in response") for _ in range(MAX_PLANNING_FAILURES + 3)]
+    )
+    agent = _agent(gateway, [REVIEW_PAGE], db_session)
+
+    outcome = await agent.run(_JOB, resume_path=Path("resume.pdf"))
+
+    assert outcome.state is ApplicationState.FAILED
+    assert any("Planning failed" in error for error in outcome.errors)
+    assert len(gateway.contexts) == MAX_PLANNING_FAILURES + 1
