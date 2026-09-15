@@ -248,3 +248,36 @@ class ArtifactRow(Base):
     deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AppStateRow(Base):
+    """Small key/value store for product state that is not domain data.
+
+    Onboarding progress and feature flags live here rather than in a config file so
+    they survive a reinstall of the code and travel with the user's database.
+    """
+
+    __tablename__ = "app_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class AnalyticsEventRow(Base):
+    """Product analytics, recorded locally and never sent anywhere.
+
+    The point is the UX metrics in the spec (time to first search, takeover
+    frequency); the payload is deliberately small and carries no free text from the
+    candidate, the postings or the pages.
+    """
+
+    __tablename__ = "analytics_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), index=True)
+    properties: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

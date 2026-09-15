@@ -53,6 +53,16 @@ class OllamaProvider(LLMProvider):
         response.raise_for_status()
         return [m["name"] for m in response.json().get("models", [])]
 
+    async def list_model_details(self) -> list[dict[str, Any]]:
+        """Full ``/api/tags`` entries: family, parameter size, quantization, size.
+
+        The Model Manager needs the metadata, not just the names, to size a model
+        and to know whether it can read an image at all.
+        """
+        response = await self._http().get("/api/tags")
+        response.raise_for_status()
+        return list(response.json().get("models", []))
+
     async def chat(
         self,
         messages: list[ChatMessage],

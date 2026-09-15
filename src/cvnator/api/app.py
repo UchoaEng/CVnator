@@ -17,7 +17,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from cvnator.agent.memory import MemoryCategory, MemoryStore
 from cvnator.agent.orchestrator import AgentSession
@@ -37,6 +37,7 @@ from cvnator.platforms import mock as _mock  # noqa: F401
 from cvnator.resume.extract import UnsupportedDocument, extract_text, sha256_file
 from cvnator.resume.parser import parse_cv_text
 from cvnator.storage.artifacts import ArtifactKind, ArtifactStore, RetentionPolicy
+from cvnator.storage.credentials import CredentialHandle, get_vault
 
 settings = get_settings()
 
@@ -433,6 +434,202 @@ async def stream_events() -> StreamingResponse:
 @app.get("/api/events/recent")
 async def recent_events(limit: int = 50) -> list[dict[str, Any]]:
     return bus.recent(limit)
+
+
+# --------------------------------------------------- application details & documents
+
+
+@app.get("/api/applications/{application_id}")
+async def application_detail(application_id: int) -> dict[str, Any]:
+    with session_scope() as session:
+        detail = repo.get_application(session, application_id)
+    if detail is None:
+        raise HTTPException(404, "No such application")
+    return detail
+
+
+@app.get("/api/documents")
+async def documents() -> dict[str, Any]:
+    with session_scope() as session:
+        return repo.list_documents(session)
+
+
+# ----------------------------------------------------------------------- onboarding
+
+#: Shape of the onboarding record. ``step`` is the furthest step reached, so a user
+#: who leaves halfway returns to where they were rather than to the beginning.
+_ONBOARDING_DEFAULT = {"completed": False, "step": 0, "skipped": False}
+
+
+@app.get("/api/onboarding")
+async def get_onboarding() -> dict[str, Any]:
+    with session_scope() as session:
+        state = repo.get_app_state(session, "onboarding", _ONBOARDING_DEFAULT)
+        # A user who already has a profile and a search has effectively onboarded;
+        # never show the wizard to someone with work in flight.
+        if not state.get("completed"):
+            has_profile = repo.load_active_profile(session) is not None
+            has_search = bool(repo.list_searches(session))
+            state = {**state, "can_skip": has_profile and has_search}
+    return state
+
+
+class OnboardingUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    completed: bool | None = None
+    step: int | None = None
+    skipped: bool | None = None
+
+
+@app.put("/api/onboarding")
+async def put_onboarding(update: OnboardingUpdate) -> dict[str, Any]:
+    with session_scope() as session:
+        state = repo.get_app_state(session, "onboarding", _ONBOARDING_DEFAULT)
+        state.update({k: v for k, v in update.model_dump().items() if v is not None})
+        saved = repo.set_app_state(session, "onboarding", state)
+    return saved
+
+
+# -------------------------------------------------------------------- feature flags
+
+#: Defaults are conservative: anything unproven against a real platform ships off.
+#: See docs/DECISIONS.md ADR-015 on why the real-platform adapters are not registered.
+_FEATURE_DEFAULTS = {
+    "VISION_FALLBACK": True,
+    "GUPY_AUTOMATION": False,
+    "AUTO_ACCOUNT_CREATION": False,
+    "EXPERIMENTAL_ATS": False,
+}
+
+
+@app.get("/api/features")
+async def get_features() -> dict[str, bool]:
+    with session_scope() as session:
+        stored = repo.get_app_state(session, "features", {})
+    return {**_FEATURE_DEFAULTS, **{k: bool(v) for k, v in stored.items()}}
+
+
+@app.put("/api/features")
+async def put_features(flags: dict[str, bool]) -> dict[str, bool]:
+    unknown = set(flags) - set(_FEATURE_DEFAULTS)
+    if unknown:
+        raise HTTPException(400, f"Unknown feature flag(s): {', '.join(sorted(unknown))}")
+    with session_scope() as session:
+        stored = repo.get_app_state(session, "features", {})
+        stored.update({k: bool(v) for k, v in flags.items()})
+        repo.set_app_state(session, "features", stored)
+    return {**_FEATURE_DEFAULTS, **stored}
+
+
+# ------------------------------------------------------------------------ accounts
+
+#: Platforms the UI offers to connect. Connecting stores the secret in the OS vault;
+#: this endpoint only ever reports whether one is present.
+_KNOWN_PLATFORMS = ["linkedin", "indeed", "glassdoor", "gupy"]
+
+
+@app.get("/api/accounts")
+async def list_accounts() -> list[dict[str, Any]]:
+    vault = get_vault()
+    with session_scope() as session:
+        known = repo.get_app_state(session, "accounts", {})
+    accounts = []
+    for platform in _KNOWN_PLATFORMS:
+        username = str(known.get(platform, ""))
+        connected = bool(username) and vault.has(CredentialHandle(platform, username))
+        accounts.append(
+            {"platform": platform, "username": username, "connected": connected}
+        )
+    return accounts
+
+
+class AccountConnect(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    platform: str
+    username: str
+    password: str
+
+
+@app.post("/api/accounts")
+async def connect_account(payload: AccountConnect) -> dict[str, Any]:
+    """Store a platform password in the OS credential vault.
+
+    The password is written straight to the vault and is never persisted in the
+    database, echoed back, or written to a log line - only the username is recorded
+    so the UI can show which account is connected.
+    """
+    if payload.platform not in _KNOWN_PLATFORMS:
+        raise HTTPException(400, f"Unknown platform {payload.platform!r}")
+    if not payload.password:
+        raise HTTPException(400, "A password is required to connect an account")
+    get_vault().store(payload.platform, payload.username, payload.password)
+    with session_scope() as session:
+        known = repo.get_app_state(session, "accounts", {})
+        known[payload.platform] = payload.username
+        repo.set_app_state(session, "accounts", known)
+        repo.record_event(session, "account_connected", {"platform": payload.platform})
+    return {"platform": payload.platform, "username": payload.username, "connected": True}
+
+
+@app.delete("/api/accounts/{platform}")
+async def disconnect_account(platform: str) -> dict[str, bool]:
+    if platform not in _KNOWN_PLATFORMS:
+        raise HTTPException(400, f"Unknown platform {platform!r}")
+    with session_scope() as session:
+        known = repo.get_app_state(session, "accounts", {})
+        username = str(known.pop(platform, ""))
+        repo.set_app_state(session, "accounts", known)
+    if username:
+        get_vault().delete(CredentialHandle(platform, username))
+    return {"disconnected": True}
+
+
+# ----------------------------------------------------------------------- analytics
+
+
+class AnalyticsEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    properties: dict[str, Any] = Field(default_factory=dict)
+
+
+#: Product events are counted locally. Anything that could carry candidate text,
+#: posting text or page content is rejected rather than truncated.
+_ALLOWED_PROPERTY_TYPES = (bool, int, float)
+
+
+@app.post("/api/analytics/events")
+async def post_event(event: AnalyticsEvent) -> dict[str, bool]:
+    clean = {
+        key: value
+        for key, value in event.properties.items()
+        if isinstance(value, _ALLOWED_PROPERTY_TYPES)
+        or (isinstance(value, str) and len(value) <= 40)
+    }
+    with session_scope() as session:
+        repo.record_event(session, event.name[:80], clean)
+    return {"recorded": True}
+
+
+@app.get("/api/analytics/events")
+async def get_events(limit: int = 200) -> list[dict[str, Any]]:
+    with session_scope() as session:
+        return repo.list_events(session, limit=limit)
+
+
+# ------------------------------------------------------------------ session summary
+
+
+@app.get("/api/session/summary")
+async def session_summary() -> dict[str, Any]:
+    with session_scope() as session:
+        summary = repo.last_session(session)
+    if summary is None:
+        raise HTTPException(404, "No session has run yet")
+    return summary
 
 
 # --------------------------------------------------------------------- static UI

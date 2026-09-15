@@ -13,10 +13,15 @@ from sqlalchemy.orm import Session
 
 from cvnator.db.models import (
     AgentSessionRow,
+    AnalyticsEventRow,
     ApplicationRow,
+    AppStateRow,
+    ArtifactRow,
     CandidateProfileRow,
     JobRow,
+    ResumeVersionRow,
     SearchProfileRow,
+    StateTransitionRow,
     UserActionRow,
 )
 from cvnator.domain.profile import CandidateMasterProfile
@@ -249,3 +254,225 @@ def interrupted_applications(session: Session) -> list[dict]:
         }
         for application, job in session.execute(stmt)
     ]
+
+
+# ------------------------------------------------------------------ application detail
+
+
+def get_application(session: Session, application_id: int) -> dict | None:
+    """Everything one application knows about itself, for the details page.
+
+    The resume *recipe* is included even when its file has been deleted -- that is the
+    point of keeping it (see ADR on temporary resumes): the user can still see which
+    version was sent, what it scored and what changed.
+    """
+    row = session.get(ApplicationRow, application_id)
+    if row is None:
+        return None
+    job = session.get(JobRow, row.job_id)
+
+    transitions = (
+        session.execute(
+            select(StateTransitionRow)
+            .where(StateTransitionRow.application_id == application_id)
+            .order_by(StateTransitionRow.created_at)
+        )
+        .scalars()
+        .all()
+    )
+
+    resume: dict | None = None
+    if row.resume_version_id:
+        version = session.execute(
+            select(ResumeVersionRow).where(
+                ResumeVersionRow.resume_version_id == row.resume_version_id
+            )
+        ).scalar_one_or_none()
+        if version is not None:
+            resume = {
+                "resume_version_id": version.resume_version_id,
+                "source_profile_version": version.source_profile_version,
+                "template_used": version.template_used,
+                "transformation_summary": version.transformation_summary,
+                "ats_score_before": version.ats_score_before,
+                "ats_score_after": version.ats_score_after,
+                "file_deleted": version.file_deleted,
+                "generation_date": version.generation_date.isoformat(),
+            }
+
+    return {
+        "id": row.id,
+        "state": row.state,
+        "platform": row.platform,
+        "external_platform": row.external_platform,
+        "dry_run": row.dry_run,
+        "started_at": row.started_at.isoformat(),
+        "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        "checkpoints": row.checkpoints,
+        "errors": row.errors,
+        "answers_used": row.answers_used,
+        "decisions_summary": row.decisions_summary,
+        "submission_evidence": row.submission_evidence,
+        "job": {
+            "id": job.id if job else None,
+            "role": job.role if job else "",
+            "company": job.company if job else "",
+            "location": job.location if job else "",
+            "url": job.url if job else "",
+            "platform": job.platform if job else "",
+            "description": (job.description[:4000] if job else ""),
+            "match_score": job.match_score if job else None,
+            "match_report": job.match_report if job else None,
+            "ats_score": job.ats_score if job else None,
+        },
+        "resume": resume,
+        "timeline": [
+            {
+                "from_state": t.from_state,
+                "to_state": t.to_state,
+                "reason": t.reason,
+                "at": t.created_at.isoformat(),
+            }
+            for t in transitions
+        ],
+    }
+
+
+# ------------------------------------------------------------------ documents
+
+
+def list_documents(session: Session) -> dict[str, list[dict]]:
+    """Files grouped the way the user thinks about them, not the way we store them.
+
+    ``master`` is never touched by cleanup; ``temporary`` is what the garbage
+    collector may remove; ``generated`` are recipes whose file may already be gone.
+    """
+    profile = session.execute(
+        select(CandidateProfileRow).where(CandidateProfileRow.is_active.is_(True))
+    ).scalar_one_or_none()
+
+    master: list[dict] = []
+    if profile is not None and profile.master_cv_path:
+        from pathlib import Path
+
+        path = Path(profile.master_cv_path)
+        master.append(
+            {
+                "name": path.name,
+                "path": str(path),
+                "kind": "master_cv",
+                "size_bytes": path.stat().st_size if path.exists() else 0,
+                "created_at": profile.created_at.isoformat(),
+                "exists": path.exists(),
+                "auto_delete": False,
+            }
+        )
+
+    artifacts = (
+        session.execute(
+            select(ArtifactRow)
+            .where(ArtifactRow.deleted.is_(False))
+            .order_by(ArtifactRow.created_at.desc())
+            .limit(500)
+        )
+        .scalars()
+        .all()
+    )
+    temporary = [
+        {
+            "name": row.path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1],
+            "path": row.path,
+            "kind": row.kind,
+            "size_bytes": row.size_bytes,
+            "created_at": row.created_at.isoformat(),
+            "application_id": row.application_id,
+            "in_use": row.in_use,
+            "exists": True,
+            "auto_delete": not row.permanent,
+        }
+        for row in artifacts
+        if not row.permanent
+    ]
+
+    versions = (
+        session.execute(
+            select(ResumeVersionRow).order_by(ResumeVersionRow.generation_date.desc()).limit(200)
+        )
+        .scalars()
+        .all()
+    )
+    generated = [
+        {
+            "resume_version_id": row.resume_version_id,
+            "job_id": row.job_id,
+            "template_used": row.template_used,
+            "ats_score_before": row.ats_score_before,
+            "ats_score_after": row.ats_score_after,
+            "created_at": row.generation_date.isoformat(),
+            "file_deleted": row.file_deleted,
+            "transformation_summary": row.transformation_summary,
+        }
+        for row in versions
+    ]
+
+    return {"master": master, "temporary": temporary, "generated": generated}
+
+
+# ------------------------------------------------------------------ app state
+
+
+def get_app_state(session: Session, key: str, default: dict | None = None) -> dict:
+    row = session.execute(select(AppStateRow).where(AppStateRow.key == key)).scalar_one_or_none()
+    if row is None:
+        return dict(default or {})
+    return dict(row.value)
+
+
+def set_app_state(session: Session, key: str, value: dict) -> dict:
+    row = session.execute(select(AppStateRow).where(AppStateRow.key == key)).scalar_one_or_none()
+    if row is None:
+        row = AppStateRow(key=key, value=value)
+        session.add(row)
+    else:
+        row.value = value
+    session.flush()
+    return dict(row.value)
+
+
+# ------------------------------------------------------------------ analytics
+
+
+def record_event(session: Session, name: str, properties: dict | None = None) -> None:
+    session.add(AnalyticsEventRow(name=name, properties=properties or {}))
+    session.flush()
+
+
+def list_events(session: Session, *, limit: int = 500) -> list[dict]:
+    rows = (
+        session.execute(
+            select(AnalyticsEventRow).order_by(AnalyticsEventRow.created_at.desc()).limit(limit)
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {"name": r.name, "properties": r.properties, "at": r.created_at.isoformat()} for r in rows
+    ]
+
+
+# ------------------------------------------------------------------ session summary
+
+
+def last_session(session: Session) -> dict | None:
+    row = session.execute(
+        select(AgentSessionRow).order_by(AgentSessionRow.started_at.desc()).limit(1)
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return {
+        "id": row.id,
+        "status": row.status,
+        "metrics": row.metrics,
+        "started_at": row.started_at.isoformat(),
+        "stopped_at": row.stopped_at.isoformat() if row.stopped_at else None,
+    }
