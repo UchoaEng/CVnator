@@ -21,33 +21,46 @@ CV → Candidate Master Profile → job discovery → job intelligence → match
 → submit → post-submission validation → history → artifact cleanup
 ```
 
-**Verified end to end in a single autonomous run** against the mock ATS, with a local
-model and a real Chromium:
+**Verified end to end** against the mock ATS, with a local model and a real Chromium.
+Ten applications across five cold-start runs — separate database, browser profile and
+artifact store each time:
 
 ```
-3 jobs discovered  →  scored 71% / 31% (rejected) / 100%
-                   →  tailored CV, fact-checked, ATS 81.3% → 81.9%
-                   →  5-step form, resume uploaded
-                   →  1 fabricated claim blocked, recovered in one turn
-                   →  pre-submission validation → submitted
-                   →  confirmed on real evidence (reference MA-951122)
-                   →  APPLYING → SUBMITTING → SUBMITTED
-                   →  temp files deleted, recipe retained
+5 of 5 runs reached a confirmed submission
+10 of 10 applications SUBMITTED, 0 failed, 0 needed a human
+
+per run:  3 jobs discovered  →  scored, 1 rejected below threshold
+                             →  2 tailored CVs, fact-checked
+                             →  5-step form, resume uploaded
+                             →  fabricated claims blocked (2-3 per run), each
+                                recovered without help
+                             →  pre-submission validation → submitted
+                             →  confirmed on real evidence (reference number)
+                             →  APPLYING → SUBMITTING → SUBMITTED
+                             →  temp files deleted, recipe retained
+
+human_intervention_rate  0.000        steps per application  23 / 24 / 24
+vision_fallback_rate     0.042        (min / median / max)
+tool_retry_rate          0.025
 ```
 
-The in-flight second application kept its resume, as it should — only a confirmed
-submission triggers cleanup.
+Reproduce it with `python scripts/measure_reliability.py --runs 5`.
 
-One run is not a reliability claim. Expect to hit cases this has not seen; the
-failure modes are designed to be visible (an honest escalation, a recorded failure)
-rather than silent.
+An in-flight or failed application keeps its resume — only a confirmed submission
+triggers cleanup.
+
+Five runs is a small sample against one cooperative ATS. The first attempt at this
+measurement lost both applications of its first run, and a later batch still lost one
+application in ten; the three defects behind those are fixed and pinned by tests.
+Expect to hit cases this has not seen. The failure modes are designed to be
+visible (an honest escalation, a recorded failure) rather than silent.
 
 **Scaffolds, clearly marked:** the LinkedIn, Indeed, Glassdoor and Gupy adapters.
 Written from the public structure of those sites, **not** validated against
 production, and not registered by default — enabling them is an explicit act. See the
 note on terms of service below.
 
-188 tests (unit + browser integration against the mock ATS).
+200 tests (unit + browser integration against the mock ATS).
 
 ## Requirements
 

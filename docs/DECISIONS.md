@@ -351,3 +351,42 @@ single turn: *"Rewriting the answer for [e10] without 'etl'"*.
 **The principle.** A guard is not finished when it refuses correctly. Refusing
 correctly and leaving the caller with no path forward converts a small factual error
 into a lost application. The remedy is part of the guard.
+
+## ADR-021 — Repeat the run before believing it **[from a run]**
+
+**Decision.** Reliability is measured by `scripts/measure_reliability.py`: N cold-start
+runs, each a separate subprocess with its own data directory, database, browser profile
+and artifact store, aggregated into a success rate and the agent-evaluation rates of
+spec section 74. A run with zero applications is skipped rather than scored as a
+perfect 0.0; a crashed run stays a failure and still divides the denominator.
+
+**Why.** One successful run proved the path existed and was reported as such. Repeating
+it exposed three defects the single run had hidden — the first repeat run lost both of
+its applications, and a later batch, with two of the three fixed, still lost one
+application in ten:
+
+1. **The session limit counted attempts, not submissions.** `applications_this_session`
+   was fed from `applications_started`, so the Nth application was blocked from
+   submitting by its own start. A limit of 2 delivered one application and abandoned
+   the second at the review screen. The earlier run's second application sitting in
+   `APPLYING` was read as correct pacing; it was this bug.
+2. **An unconfirmed submit offered giving up as an option.** The agent clicked *next* on
+   the last form step, landed on the review page, and was told only that the submission
+   *"could not be confirmed ... or report failure"*. It reported failure, one control
+   short of the end.
+3. **One malformed answer ended the application.** The model narrated past the token
+   budget mid-JSON; the parse failed; the application was recorded `FAILED` with no
+   retry.
+
+After the fixes: **5 of 5 runs, 10 of 10 applications submitted**, no human
+intervention, 23–24 steps per application.
+
+**The principle.** Defects two and three are ADR-020 again, in new places: a correct
+refusal that leaves no move. That makes three instances, which is enough to state it as
+a rule rather than an anecdote — **every refusal path must name the next action**, and a
+guard's remedy deserves the same test coverage as its trigger.
+
+The narrower lesson is about evidence. A single green run measures that success is
+*possible*, and it is easy to mistake for a measure of how often it *happens*. The two
+differ by whatever the run happened not to hit — here, three defects and a false
+reading of a fourth behaviour. Nothing may be called reliable on one observation.
