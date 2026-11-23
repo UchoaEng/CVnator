@@ -1,5 +1,7 @@
 # CVnator
 
+[🇧🇷 Leia em português](#-português)
+
 An autonomous, computer-using job application agent. It searches for jobs, reads
 them, scores them against your real experience, tailors a CV that stays truthful,
 fills in multi-step application forms in a real browser, validates before and after
@@ -173,3 +175,115 @@ cd frontend && npm run typecheck
 ```
 
 `docs/ARCHITECTURE.md` explains the design decisions and why they are what they are.
+
+---
+
+## 🇧🇷 Português
+
+# CVnator
+
+Um agente autônomo de candidaturas que usa o computador. Ele busca vagas, lê cada uma, pontua contra a sua experiência real, adapta um currículo que continua verdadeiro, preenche formulários de várias etapas num navegador de verdade, valida antes e depois de enviar e só te pergunta quando realmente não consegue seguir.
+
+Tudo roda na sua máquina: modelos locais via Ollama, banco local e arquivos locais. Nada sai do computador a menos que você configure explicitamente um endpoint remoto, e o código avisa em voz alta quando você faz isso.
+
+### O que já funciona
+
+O pipeline roda contra um ATS simulado local, com um modelo local real e um Chromium real:
+
+```
+CV → perfil mestre do candidato → descoberta de vagas → leitura da vaga → pontuação de aderência
+→ análise de ATS → currículo adaptado → validação de fatos → PDF/DOCX
+→ agente no navegador → formulário de várias etapas → upload → validação antes do envio
+→ envio → validação depois do envio → histórico → limpeza dos arquivos
+```
+
+**Verificado de ponta a ponta** contra o ATS simulado: dez candidaturas em cinco execuções do zero (banco, perfil de navegador e arquivos separados a cada vez). As 5 execuções chegaram a um envio confirmado; as 10 candidaturas foram enviadas, nenhuma falhou e nenhuma precisou de humano. Em cada execução, 3 vagas descobertas, 1 rejeitada abaixo do limite, 2 currículos adaptados e checados, formulário de 5 etapas com upload, 2 a 3 afirmações inventadas bloqueadas e corrigidas sozinhas, e envio confirmado por evidência real (número de protocolo). Métricas: taxa de intervenção humana 0,000, uso do fallback de visão 0,042, taxa de nova tentativa 0,025 e 23/24/24 passos por candidatura (mín./mediana/máx.).
+
+Reproduza com `python scripts/measure_reliability.py --runs 5`. Uma candidatura em andamento ou com falha mantém o currículo; só um envio confirmado dispara a limpeza.
+
+Cinco execuções são uma amostra pequena contra um único ATS cooperativo. A primeira medição perdeu as duas candidaturas da primeira execução, e um lote posterior ainda perdeu uma em dez; os três defeitos por trás disso foram corrigidos e fixados por testes. Espere casos que isto ainda não viu: as falhas foram desenhadas para ser visíveis (uma escalada honesta, uma falha registrada), não silenciosas.
+
+**Esqueletos, claramente marcados:** os adaptadores de LinkedIn, Indeed, Glassdoor e Gupy foram escritos a partir da estrutura pública desses sites, **não** foram validados em produção e não vêm registrados por padrão; ativá-los é um ato explícito. Veja a nota sobre termos de uso abaixo.
+
+200 testes (unitários e de integração no navegador contra o ATS simulado).
+
+### Requisitos
+
+- Python 3.12–3.14 e Node 20+
+- [Ollama](https://ollama.com) rodando localmente
+- ~8 GB de VRAM para os modelos padrão (o gerenciador de recursos trabalha dentro do limite que você definir)
+
+```bash
+ollama pull qwen3.5:9b     # raciocínio, currículo e tradução
+ollama pull gemma3:4b      # fallback de visão
+```
+
+### Instalação
+
+```bash
+uv venv --python 3.13
+uv pip install -e ".[dev]"
+.venv/Scripts/python -m playwright install chromium
+cp .env.example .env
+.venv/Scripts/python -m alembic upgrade head
+cd frontend && npm install && npm run build && cd ..
+```
+
+### Executar
+
+```bash
+.venv/Scripts/python -m cvnator.cli serve
+```
+
+Abra http://127.0.0.1:8088 e: envie seu currículo → revise o perfil extraído → crie uma busca de vagas → aperte **Start**. Para desenvolver a interface, rode a API e o `npm run dev` em `frontend/` lado a lado; o Vite faz proxy de `/api` para o processo Python.
+
+### Testar com segurança, contra o ATS simulado
+
+```bash
+.venv/Scripts/python -m cvnator.mockats              # terminal 1
+.venv/Scripts/python scripts/run_vertical_slice.py   # terminal 2
+```
+
+Isso exercita o pipeline completo sem tocar no serviço real de ninguém.
+
+### As regras que ele segue
+
+Elas são aplicadas no código (no validador de fatos e no motor de políticas), não só pedidas num prompt.
+
+**Ele não inventa nada sobre você.** Nem emprego, nem tecnologia, nem certificação, nem idioma, nem salário, nem número de anos. Ele pode reescrever o que é verdade ("criou dashboards operacionais" pode virar "desenvolveu e manteve dashboards para análise de KPIs operacionais") e recusa qualquer coisa que acrescente um fato. Nomes de empresas, cargos e datas são copiados do seu perfil; o modelo nunca tem como escrevê-los.
+
+**Ele não burla CAPTCHA, MFA nem verificação de bot.** Ele pausa e te pergunta. Não há flags de stealth nem falsificação de fingerprint. Se uma plataforma disser que está bloqueando automação, o agente para e te avisa.
+
+**Ele não diz que uma ação deu certo só porque a executou.** Um clique que não mudou nada é uma falha. Uma candidatura só é marcada como enviada com evidência real: mensagem de confirmação, número de protocolo ou página de confirmação.
+
+**Ele não esconde falhas.** Candidaturas que falharam ou foram abandonadas ficam registradas com o motivo.
+
+### Dry run
+
+O dry run vem **ligado por padrão**. O agente busca, compara, gera currículos e preenche formulários, mas o envio final é bloqueado pelo motor de políticas. Desligue nas configurações quando já tiver visto o suficiente para confiar.
+
+### As notas de ATS são estimativas
+
+Nenhum fornecedor de ATS publica o seu algoritmo de ranking, e o CVnator não finge reproduzir um. A nota é uma estimativa interna de cobertura, útil para comparar duas versões do seu currículo contra a mesma vaga e nada mais. Não é a probabilidade de ser chamado para entrevista. Melhoras modestas (81% → 82%) aparecem mais que as dramáticas: é a regra de honestidade funcionando, porque a diferença costuma ser feita de habilidades que você não tem, e o sistema não vai acrescentá-las.
+
+### Uma nota sobre plataformas reais
+
+LinkedIn, Indeed e Glassdoor proíbem acesso automatizado nos termos de uso. Usar os adaptadores-esqueleto contra uma conta real pode fazer essa conta ser restringida. Essa decisão é só sua, e por isso esses adaptadores vêm desligados e não há código aqui para ajudar a evitar detecção. O ATS simulado e o adaptador genérico (para páginas de carreira e ATS que não proíbem) são os caminhos prontos para uso.
+
+### Seus dados
+
+- O currículo mestre e o perfil ficam em `data/`, na sua máquina.
+- Credenciais vão para o cofre do sistema (Gerenciador de Credenciais do Windows, Keychain do macOS, Secret Service), nunca para o banco, os logs ou um prompt de modelo.
+- Os logs são filtrados contra qualquer coisa que pareça segredo antes de serem gravados.
+- Os currículos adaptados são temporários por padrão e apagados depois do envio confirmado; a receita para refazê-los é mantida.
+
+### Desenvolvimento
+
+```bash
+.venv/Scripts/python -m pytest          # testes
+.venv/Scripts/python -m ruff check src/ # lint
+.venv/Scripts/python -m mypy            # tipos
+cd frontend && npm run typecheck
+```
+
+O `docs/ARCHITECTURE.md` explica as decisões de design e por que elas são o que são.
